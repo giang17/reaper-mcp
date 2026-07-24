@@ -14,6 +14,7 @@ Requires optional dependencies: numpy, soundfile, pyloudnorm.
 Install with: pip install 'reaper-mcp[analysis]'
 """
 
+import json
 import os
 import sys
 
@@ -132,7 +133,13 @@ def _find_peak_candidates(mono, sr: int, sensitivity: float) -> list:
     right_pad = window - 1 - left_pad
     padded = np.pad(abs_samples, (left_pad, right_pad), mode="edge")
     baseline = np.convolve(padded, kernel, mode="valid")
-    floor = 1e-4  # absolute magnitude floor so near-zero baseline doesn't trivially flag noise
+    # -60 dBFS: below this, content is near the noise floor of ordinary
+    # background/room tone, which fluctuates around its own tiny baseline
+    # and would otherwise trip a purely multiplicative threshold (an
+    # earlier -80 dBFS floor let exactly this happen — verified live
+    # against a synthetic near-silent span, which produced 17 false
+    # "click" candidates from nothing but random noise variance).
+    floor = 10 ** (-60.0 / 20.0)
     threshold = baseline * sensitivity + floor
     flagged = abs_samples > threshold
     # The first/last half-window still has no reliable local baseline no
@@ -364,6 +371,76 @@ def register(mcp: FastMCP):
         return {
             "sensitivity": sensitivity,
             "candidates": candidates,
+            "hint": hint,
+        }
+
+    @mcp.tool()
+    async def analyze_region_qc(wav_path: str, regions: str) -> dict:
+        """Per-region silence + peak/click candidate report — the post-production QC pass.
+
+        regions is a JSON array populated from marker_get_all() (regions are
+        markers with is_region: true), e.g.
+        '[{"name":"Line 12","start":10.2,"end":14.8}]'. A region extending
+        past the actual audio's duration is clamped, not rejected — the
+        returned region's start/end reflect what was actually analyzed.
+
+        Args:
+            wav_path: Path to a rendered WAV file.
+            regions: JSON array of {"name": str, "start": float, "end": float}.
+        """
+        try:
+            parsed = json.loads(regions)
+        except (json.JSONDecodeError, TypeError):
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "Invalid regions JSON")
+        if not isinstance(parsed, list) or len(parsed) == 0:
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "regions must be a non-empty JSON array")
+        if len(parsed) > 200:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Too many regions: {len(parsed)} (max 200)")
+        for i, r in enumerate(parsed):
+            if "start" not in r or "end" not in r:
+                raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, f"Region {i} missing start/end")
+
+        samples, sr = _load_wav(wav_path)
+        mono = _to_mono(samples.astype(np.float64))
+        total_duration = mono.size / sr if sr else 0.0
+
+        results = []
+        total_flags = 0
+        for r in parsed:
+            start, end = _clamp_region(float(r["start"]), float(r["end"]), total_duration)
+            start_idx = int(start * sr)
+            end_idx = int(end * sr)
+            segment = mono[start_idx:end_idx]
+
+            silence = _find_silence_candidates(segment, sr, threshold_db=-40.0, min_duration=0.3)
+            peaks = _find_peak_candidates(segment, sr, sensitivity=3.0)
+            for c in silence:
+                c["start_sec"] = round(c["start_sec"] + start, 3)
+                c["end_sec"] = round(c["end_sec"] + start, 3)
+            for c in peaks:
+                c["time_sec"] = round(c["time_sec"] + start, 3)
+
+            flag_count = len(silence) + len(peaks)
+            total_flags += flag_count
+            results.append({
+                "name": r.get("name", ""),
+                "start": start,
+                "end": end,
+                "silence_candidates": silence,
+                "peak_candidates": peaks,
+                "flag_count": flag_count,
+            })
+
+        hint = (
+            f"{total_flags} candidate(s) across {len(results)} region(s) — "
+            f"review flagged regions before final edit."
+            if total_flags
+            else f"No candidates found across {len(results)} region(s)."
+        )
+        return {
+            "region_count": len(results),
+            "regions": results,
+            "total_flags": total_flags,
             "hint": hint,
         }
 

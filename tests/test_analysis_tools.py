@@ -12,6 +12,7 @@ np = pytest.importorskip("numpy")
 from reaper_mcp.tools.analysis_tools import (
     _find_silence_candidates,
     _find_peak_candidates,
+    _clamp_region,
 )
 
 
@@ -91,3 +92,20 @@ class TestFindPeakCandidates:
         low_sensitivity = _find_peak_candidates(mono, sr, sensitivity=1.0)
         high_sensitivity = _find_peak_candidates(mono, sr, sensitivity=50.0)
         assert len(low_sensitivity) >= len(high_sensitivity)
+
+
+class TestClampRegion:
+    def test_region_within_bounds_unchanged(self):
+        assert _clamp_region(2.0, 5.0, 10.0) == (2.0, 5.0)
+
+    def test_end_past_file_duration_clamped(self):
+        assert _clamp_region(8.0, 15.0, 10.0) == (8.0, 10.0)
+
+    def test_start_negative_clamped_to_zero(self):
+        assert _clamp_region(-3.0, 5.0, 10.0) == (0.0, 5.0)
+
+    def test_region_entirely_past_end_clamps_to_zero_length(self):
+        assert _clamp_region(12.0, 15.0, 10.0) == (10.0, 10.0)
+
+    def test_swapped_bounds_after_clamping_get_reordered(self):
+        assert _clamp_region(6.0, 3.0, 10.0) == (3.0, 6.0)
