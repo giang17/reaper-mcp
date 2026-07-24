@@ -399,6 +399,8 @@ Your support helps keep this project maintained and free for everyone.
 - **[Contributing](CONTRIBUTING.md)** — How to add tools and contribute
 - **[Changelog](CHANGELOG.md)** — Version history and release notes
 
+**Want to know when a new version ships?** Click **Watch → Custom → Releases** at the top of this repo — GitHub notifies you on every tagged [Release](../../releases), without the noise of every commit or issue.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
