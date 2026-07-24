@@ -22,7 +22,7 @@ PROFILES: dict[str, set[str] | None] = {
         "item_tools", "take_tools", "midi_tools", "quantize_tools",
         "marker_tools", "tempo_tools", "selection_tools",
         "compose_tools", "compose_edit_tools", "patterns_tools",
-        "loops_tools", "chops_tools",
+        "loops_tools", "chops_tools", "script_tools",
     },
     # `mixing` — mix + master + bus pipelines + analysis. Drops MIDI/composition.
     "mixing": {
@@ -52,7 +52,7 @@ _EXPECTED_MODULES = frozenset({
     "demo_tools", "envelope_tools", "fx_tools", "inventory_tools",
     "item_tools", "loops_tools", "marker_tools", "midi_tools", "mix_tools",
     "patterns_tools", "pipeline_tools", "project_tools", "quantize_tools",
-    "selection_tools", "send_tools", "sidechain_tools", "take_tools",
+    "script_tools", "selection_tools", "send_tools", "sidechain_tools", "take_tools",
     "template_tools", "tempo_tools", "track_tools", "transport_tools",
 })
 
