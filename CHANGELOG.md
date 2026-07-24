@@ -16,6 +16,12 @@ All notable changes to ReaperMCP will be documented in this file.
   order, so a delete never shifts the indices of items processed later in
   the same batch. Per-entry error collection — a bad item_index doesn't
   abort the rest of the batch. (issue #4)
+- **ReaScript integration** — `script_list` discovers `.lua`/`.eel`
+  scripts in REAPER's own Scripts folder (never an AI-supplied path);
+  `script_run` registers and runs one, optionally waiting up to 30s for a
+  result the script reports via a documented `ExtState` convention.
+  Lets the AI trigger scripts users have already written, instead of
+  reimplementing that logic as new MCP tools one at a time. (issue #4)
 
 ## [0.5.0] - 2026-07-20
 

@@ -59,6 +59,52 @@ See `reaper_mcp/tools/transport_tools.py` for the simplest reference implementat
 
 The mix engine walks live track names and matches them against the alias tables — no hard-coded track indices.
 
+## External generation pipelines (TTS, voice synthesis, and similar)
+
+If your contribution wraps an external generation service — text-to-speech,
+voice synthesis, sample generation, anything that calls out to another API
+or model and hands back a file — build it as a **separate MCP server**,
+not as new tools inside reaper-mcp itself. This keeps reaper-mcp's
+dependency surface and tool-schema size (which every connected client pays
+for, on every turn) scoped to DAW control, and keeps generation pipelines
+free to iterate on their own release cycle. Import the result into a
+project with reaper-mcp's existing tools (`item_insert_media` and
+friends) — no direct integration needed.
+
+That raises a design choice worth thinking through before you build:
+should the two servers stay fully independent, coordinated only by the AI
+client calling tools from each in turn — or should one server also act as
+an MCP *client* to the other, so a single tool call internally handles
+generation and import together?
+
+- **AI-orchestrated (recommended default).** Each server stays simple and
+  independently useful. The AI sees the intermediate result (e.g. the
+  generated audio) between steps, so it can adjust — regenerate with
+  different lyrics, pick a different take, change where it lands — before
+  committing to the import. The cost is an extra round-trip per pipeline
+  run, which in practice is small.
+- **Server-to-server (direct MCP client call).** Fewer round-trips, lower
+  token cost for chained/repeated pipelines. The cost is real: the two
+  servers become version-coupled, the AI loses visibility into (and the
+  ability to steer) the intermediate step, and you're maintaining bespoke
+  bridge code for every pairing. Only worth it once a pipeline is fixed
+  and run often enough that the per-call overhead actually matters —
+  don't reach for it by default.
+
+Prefer the AI-orchestrated shape unless you have a concrete, measured
+reason not to.
+
+## Running local ReaScripts
+
+`script_tools.py` gives the AI a path to executing the user's own local
+scripts — a materially bigger capability than everything else in this
+tool surface, which only calls fixed, audited REAPER API functions
+through our own handlers. If you extend this feature, keep the trust
+boundary intact: discovery and execution stay hard-coded to REAPER's own
+Scripts folder (`reaper.GetResourcePath() .. "/Scripts"`), never an
+AI- or conversation-supplied path. Don't add a parameter that overrides
+this.
+
 ## Code style
 
 - Python 3.10+ (type hints on public surfaces).
