@@ -111,8 +111,7 @@ All notable changes to ReaperMCP will be documented in this file.
   and `load_loops`' track-create path (the common case — loading into a
   project without a pre-existing matching track name) silently loaded 0
   loops. Fixed to read from `result["data"]` with a flat-dict fallback,
-  matching the pattern `chops_tools.py` already used. Contributed by
-  @KaseMaster (PR #5).
+  matching the pattern `chops_tools.py` already used. (PR #5)
 - **`project_save_as` never actually saved to the given path.** Its Lua
   handler called `reaper.Main_SaveProject(0, path)` — that function's
   second argument is a boolean ("force the Save-As dialog"), not a
