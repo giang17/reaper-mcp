@@ -5,7 +5,7 @@ Status: Approved, pending implementation plan
 
 ## Background
 
-GitHub issue #4 (contributor Gaaaamu) proposed several post-production
+GitHub issue #4 proposed several post-production
 gaps in reaper-mcp's tool surface. Item 3 of that list:
 
 > User script integration — discover local ReaScripts (scan a scripts
@@ -71,8 +71,17 @@ case-insensitive substring match against path + description, for
 libraries larger than the cap (a full ReaPack install can have thousands
 of scripts).
 
-Returns per script: `{path (relative to Scripts/), description,
-registered (bool — already has a command_id or not)}`.
+Returns per script: `{path (relative to Scripts/), description}`.
+
+**Correction found during implementation:** the original draft of this
+spec also included a `registered` boolean (already has a command_id or
+not). REAPER's only relevant API, `AddRemoveReaScript(add, sectionID,
+scriptfn, commit)`, has side effects in both directions — `add=true`
+registers, `add=false` *de-registers* — there is no side-effect-free way
+to query registration status. Checking it during discovery would mean
+either registering every script just by listing them (defeats discovery
+being read-only) or risking de-registering the user's existing actions.
+Dropped from the output.
 
 ### `script_run(script_path: str, wait_seconds: float = 5.0)`
 
@@ -201,7 +210,7 @@ Unit tests (mocked client, matching existing test conventions):
 - `tests/test_script_tools.py` — new.
 - `CONTRIBUTING.md` — brief mention alongside the external-generation-
   pipeline guidance already added this session.
-- `CHANGELOG.md` — entry under `[0.5.0]`, crediting issue #4 / Gaaaamu.
+- `CHANGELOG.md` — entry under `[0.5.0]`, referencing issue #4.
 
 ## Explicitly out of scope (this pass)
 

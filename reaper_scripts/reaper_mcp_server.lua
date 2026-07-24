@@ -4315,6 +4315,112 @@ end
 
 
 -- ============================================================
+-- ReaScript integration (issue #4) — discovery + execution, scoped
+-- strictly to REAPER's own Scripts folder. Never an AI- or
+-- conversation-supplied path.
+-- ============================================================
+
+local script = {}
+
+local function reascript_ext_ok(name)
+  local ext = name:match("%.([%a%d]+)$")
+  if not ext then return false end
+  ext = ext:lower()
+  return ext == "lua" or ext == "eel"
+end
+
+local function parse_script_header(full_path)
+  local f = io.open(full_path, "r")
+  if not f then return "" end
+  local description, about = "", ""
+  local line_count = 0
+  for line in f:lines() do
+    line_count = line_count + 1
+    if line_count > 20 then break end
+    local d = line:match("@description%s+(.+)")
+    if d then description = d end
+    local a = line:match("@about%s*(.*)")
+    if a and a ~= "" and about == "" then about = a end
+  end
+  f:close()
+  if description ~= "" then return description end
+  return about
+end
+
+local function scan_scripts_dir(base, rel, filter, results, max_results)
+  if #results >= max_results then return end
+  local i = 0
+  while true do
+    local fname = reaper.EnumerateFiles(base, i)
+    if not fname then break end
+    if reascript_ext_ok(fname) then
+      local rel_path = (rel == "" and fname or (rel .. "/" .. fname))
+      local full_path = base .. "/" .. fname
+      local description = parse_script_header(full_path)
+      if filter == "" or rel_path:lower():find(filter, 1, true) or description:lower():find(filter, 1, true) then
+        results[#results+1] = {path = rel_path, description = description}
+        if #results >= max_results then return end
+      end
+    end
+    i = i + 1
+  end
+  local j = 0
+  while true do
+    local subdir = reaper.EnumerateSubdirectories(base, j)
+    if not subdir then break end
+    local rel_sub = (rel == "" and subdir or (rel .. "/" .. subdir))
+    scan_scripts_dir(base .. "/" .. subdir, rel_sub, filter, results, max_results)
+    if #results >= max_results then return end
+    j = j + 1
+  end
+end
+
+function script.script_list(p)
+  local filter = (p.filter or ""):lower()
+  local scripts_root = reaper.GetResourcePath() .. "/Scripts"
+  local results = {}
+  scan_scripts_dir(scripts_root, "", filter, results, 300)
+  return {success = true, scripts = results, count = #results}
+end
+
+local function safe_script_path(script_path)
+  local normalized = script_path:gsub("\\", "/")
+  if normalized:sub(1, 1) == "/" then return nil, "script_path must be relative" end
+  if normalized:match("^%a:") then return nil, "script_path must be relative" end
+  for part in normalized:gmatch("[^/]+") do
+    if part == ".." then return nil, "script_path must not contain '..'" end
+  end
+  return normalized
+end
+
+function script.script_run_start(p)
+  if not p.script_path then return nil, "Missing parameter: script_path" end
+  local normalized, err = safe_script_path(p.script_path)
+  if not normalized then return nil, err end
+
+  local scripts_root = reaper.GetResourcePath() .. "/Scripts"
+  local full_path = scripts_root .. "/" .. normalized
+
+  local f = io.open(full_path, "r")
+  if not f then return nil, "Script file not found: " .. normalized end
+  f:close()
+
+  reaper.SetExtState("reaper_mcp_script_result", "last_result", "", false)
+
+  local cmd_id = reaper.AddRemoveReaScript(true, 0, full_path, true)
+  if not cmd_id or cmd_id == 0 then
+    return nil, "Failed to register script: " .. normalized
+  end
+  reaper.Main_OnCommand(cmd_id, 0)
+  return {success = true, command_id = cmd_id}
+end
+
+function script.script_read_result(p)
+  local value = reaper.GetExtState("reaper_mcp_script_result", "last_result")
+  return {value = value or ""}
+end
+
+-- ============================================================
 -- Command dispatch table
 -- ============================================================
 
@@ -4331,6 +4437,7 @@ for k, v in pairs(midi) do handlers[k] = v end
 for k, v in pairs(compose) do handlers[k] = v end
 for k, v in pairs(envelope) do handlers[k] = v end
 for k, v in pairs(tempo) do handlers[k] = v end
+for k, v in pairs(script) do handlers[k] = v end
 
 -- ============================================================
 -- Main loop
