@@ -22,6 +22,17 @@ All notable changes to ReaperMCP will be documented in this file.
   result the script reports via a documented `ExtState` convention.
   Lets the AI trigger scripts users have already written, instead of
   reimplementing that logic as new MCP tools one at a time. (issue #4)
+- **Edit-oriented QC analysis** — `analyze_silence` and `analyze_peaks`
+  find silence and click/pop candidates in a rendered WAV file;
+  `analyze_region_qc` runs both scoped to each region from `marker_get_all()`,
+  producing a per-region punch list for post-production review. These flag
+  *candidates* for human review, not certainties. Breath detection is
+  deliberately not included — reliably telling a breath apart from quiet
+  room tone needs spectral/ML classification, not an amplitude heuristic;
+  it's left for a real ML-based approach later rather than shipping
+  something unreliable under the same name. This whole feature needs
+  real-world testing with post-production users before its output should
+  be trusted as more than a rough first pass. (issue #4)
 
 ## [0.5.0] - 2026-07-20
 
