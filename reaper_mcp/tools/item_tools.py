@@ -1,3 +1,5 @@
+import json
+
 from mcp.server.fastmcp import FastMCP
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 from reaper_mcp_shared.path_safety import safe_path as _safe_path
@@ -242,3 +244,24 @@ def register(mcp: FastMCP):
         if dest_track_index < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "dest_track_index must be >= 0")
         return await client.execute("item_move_to_track", item_index=item_index, dest_track_index=dest_track_index)
+
+    @mcp.tool()
+    async def items_apply(entries: str) -> dict:
+        """Batch set position/length/volume_db/mute/fade_in/fade_out, or delete, across many items in one call.
+
+        Args:
+            entries: JSON array. Each: {"item_index":0, "volume_db":-3.0, "fade_in":0.05}.
+                     Or {"item_index":5, "delete":true}. Only item_index required.
+                     Non-delete changes apply first (in the order given); deletes apply
+                     last, in descending item_index order, regardless of input order —
+                     this avoids a delete shifting the indices of items processed later
+                     in the same batch. A bad item_index is recorded in the response's
+                     errors array and does not abort the rest of the batch.
+        """
+        try:
+            parsed = json.loads(entries)
+        except (json.JSONDecodeError, TypeError):
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "Invalid entries JSON")
+        _validate_items_apply_entries(parsed)
+        ordered = _order_items_apply_entries(parsed)
+        return await client.execute("items_apply", entries=json.dumps(ordered))

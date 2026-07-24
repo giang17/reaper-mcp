@@ -1464,6 +1464,69 @@ function item.item_move_to_track(p)
   return build_item_info(it, math.floor(p.item_index))
 end
 
+function item.items_apply(p)
+  if not p.entries then return nil, "Missing parameter: entries" end
+  local entries = json_decode(p.entries)
+  if not entries then return nil, "Invalid entries JSON" end
+
+  -- Non-delete entries first (input order), then deletes last in
+  -- descending item_index order — matches _order_items_apply_entries
+  -- on the Python side, done again here since the Lua side must be
+  -- correct on its own regardless of what order it receives.
+  local non_deletes, deletes = {}, {}
+  for _, e in ipairs(entries) do
+    if e.delete == true then
+      deletes[#deletes+1] = e
+    else
+      non_deletes[#non_deletes+1] = e
+    end
+  end
+  table.sort(deletes, function(a, b) return a.item_index > b.item_index end)
+
+  reaper.Undo_BeginBlock()
+  local applied = 0
+  local errors = {}
+
+  local function apply_one(idx, e)
+    local it = reaper.GetMediaItem(0, math.floor(e.item_index))
+    if not it then
+      errors[#errors+1] = {index = idx, item_index = e.item_index, error = "Item not found"}
+      return
+    end
+    if e.delete == true then
+      reaper.DeleteTrackMediaItem(reaper.GetMediaItemTrack(it), it)
+      applied = applied + 1
+      return
+    end
+    if e.position ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "D_POSITION", e.position)
+    end
+    if e.length ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "D_LENGTH", e.length)
+    end
+    if e.volume_db ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "D_VOL", vol_from_db(e.volume_db))
+    end
+    if e.mute ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "B_MUTE", e.mute and 1 or 0)
+    end
+    if e.fade_in ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "D_FADEINLEN", e.fade_in)
+    end
+    if e.fade_out ~= nil then
+      reaper.SetMediaItemInfo_Value(it, "D_FADEOUTLEN", e.fade_out)
+    end
+    applied = applied + 1
+  end
+
+  for i, e in ipairs(non_deletes) do apply_one(i - 1, e) end
+  for i, e in ipairs(deletes) do apply_one(#non_deletes + i - 1, e) end
+
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("items_apply", -1)
+  return {success = true, applied = applied, errors = errors}
+end
+
 -- ============================================================
 -- CHOP handlers (slicing, pitch, time-stretch, reverse, duplicate)
 -- ============================================================
