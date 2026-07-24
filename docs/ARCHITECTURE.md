@@ -175,7 +175,7 @@ reaper_mcp/
 │   └── 00_core.md          # System-prompt instructions injected into the MCP
 │                           #   server's `instructions` field (composition workflow,
 │                           #   BBC Spitfire CC reference, style cheat sheet).
-├── tools/                  # 25 modules, 163 tools (auto-registered)
+├── tools/                  # 26 modules, 172 tools (auto-registered)
 └── mix_engine/             # Detect → clean → EQ → comp → reverb → master pipeline
 
 reaper_mcp_shared/

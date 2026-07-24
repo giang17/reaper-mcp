@@ -167,15 +167,15 @@ Open your AI client and start talking:
 
 ### Tool profiles
 
-The default 163-tool surface is designed for full-featured frontier models. Smaller/cheaper models (Groq Llama 3 caps at 128 tools, some local models lower still) will silently truncate. Set `REAPER_MCP_PROFILE` in your client's server config to pick a workflow-specific subset:
+The default 172-tool surface is designed for full-featured frontier models. Smaller/cheaper models (Groq Llama 3 caps at 128 tools, some local models lower still) will silently truncate. Set `REAPER_MCP_PROFILE` in your client's server config to pick a workflow-specific subset:
 
 | Profile | Tools | For |
 |---------|------:|-----|
-| `full` *(default)* | ~163 | Frontier models — Claude, GPT-4, Gemini |
-| `composition` | ~123 | Writing / editing music (includes patterns + loops) |
-| `mixing` | ~68 | Mixing, mastering, bus pipelines |
-| `analysis` | ~47 | Inspect + measure only |
-| `minimal` | ~40 | Smoke test / basic control |
+| `full` *(default)* | ~172 | Frontier models — Claude, GPT-4, Gemini |
+| `composition` | ~129 | Writing / editing music (includes patterns, loops, batch item/marker edits, ReaScript) |
+| `mixing` | ~71 | Mixing, mastering, bus pipelines |
+| `analysis` | ~52 | Inspect + measure only |
+| `minimal` | ~42 | Smoke test / basic control |
 
 ```json
 {

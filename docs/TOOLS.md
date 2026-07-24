@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for every MCP tool exposed by ReaperMCP — **163 tools across 25 modules**. Grouped by domain; each tool links to its source module.
+Complete reference for every MCP tool exposed by ReaperMCP — **172 tools across 26 modules**. Grouped by domain; each tool links to its source module.
 
 > All tools are async. Numeric inputs are range-validated before being sent to REAPER. Track/item indices are 0-based.
 
@@ -12,11 +12,11 @@ Set `REAPER_MCP_PROFILE=<name>` in your MCP client's server config to register o
 
 | Profile | Modules | Approx. tools | Use when |
 |---------|--------:|--------------:|----------|
-| `full` | 25 | 163 | Default. You're on Claude / GPT-4 / Gemini-class models. |
-| `composition` | 16 | ~119 | Writing or editing music (incl. patterns, loops, vocal chops). Drops FX, mix, sidechain, analysis. |
-| `mixing` | 10 | ~67 | Mixing / mastering / bus pipelines. Drops MIDI / composition. |
-| `analysis` | 5 | ~47 | Inspect and measure only. Read-mostly workflow. |
-| `minimal` | 3 | ~40 | Smoke test / basic control surface. |
+| `full` | 26 | 172 | Default. You're on Claude / GPT-4 / Gemini-class models. |
+| `composition` | 17 | ~129 | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
+| `mixing` | 10 | ~71 | Mixing / mastering / bus pipelines. Drops MIDI / composition. |
+| `analysis` | 5 | ~52 | Inspect and measure only. Read-mostly workflow. |
+| `minimal` | 3 | ~42 | Smoke test / basic control surface. |
 
 **How to set it — Claude Desktop / Cursor / any MCP client with env support:**
 
@@ -50,12 +50,12 @@ On startup the server writes a banner to stderr confirming the active profile an
 | [Transport](#transport) | `transport_tools.py` | 11 |
 | [Tracks](#tracks) | `track_tools.py` | 18 |
 | [Track Templates](#track-templates) | `template_tools.py` | 4 |
-| [Project](#project) | `project_tools.py` | 11 |
-| [Items](#items) | `item_tools.py` | 13 |
+| [Project](#project) | `project_tools.py` | 13 |
+| [Items](#items) | `item_tools.py` | 14 |
 | [Takes](#takes) | `take_tools.py` | 4 |
 | [MIDI](#midi) | `midi_tools.py` | 13 |
 | [MIDI Quantize / Humanize](#midi-quantize--humanize) | `quantize_tools.py` | 3 |
-| [Markers & Regions](#markers--regions) | `marker_tools.py` | 6 |
+| [Markers & Regions](#markers--regions) | `marker_tools.py` | 7 |
 | [Tempo Map](#tempo-map) | `tempo_tools.py` | 4 |
 | [Envelopes](#envelopes) | `envelope_tools.py` | 3 |
 | [Selection](#selection) | `selection_tools.py` | 9 |
@@ -70,7 +70,8 @@ On startup the server writes a banner to stderr confirming the active profile an
 | [Patterns](#patterns) | `patterns_tools.py` | 2 |
 | [Loop Library](#loop-library) | `loops_tools.py` | 3 |
 | [Vocal Chops](#vocal-chops) | `chops_tools.py` | 10 |
-| [Audio Analysis](#audio-analysis) | `analysis_tools.py` | 4 |
+| [Audio Analysis](#audio-analysis) | `analysis_tools.py` | 7 |
+| [ReaScript](#reascript) | `script_tools.py` | 2 |
 | [Demo](#demo) | `demo_tools.py` | 1 |
 
 ---
@@ -136,6 +137,7 @@ Project lifecycle, save/load, rendering, undo. Source: `project_tools.py`.
 | Tool | Description |
 |------|-------------|
 | `project_get_info()` | Project path, length, BPM, time signature, sample rate. |
+| `project_get_change_count()` | Cheap counter that bumps on any edit — check it before re-fetching heavier data (`track_get_all`, `item_get_all`) instead of blindly re-querying every turn. |
 | `project_new()` | Create a new empty project. |
 | `project_open(path)` | Open a project file. |
 | `project_save()` | Save the current project. |
@@ -166,6 +168,7 @@ Media item CRUD, split, fades, move, drop MIDI or audio files. Source: `item_too
 | `item_insert_media(track_index, path, position=0.0)` | Drop an audio/MIDI file onto a track. |
 | `item_create_midi(track_index, position=0.0, length=4.0)` | Create an empty MIDI item. |
 | `item_move_to_track(item_index, dest_track_index)` | Relocate an item to another track. |
+| `items_apply(entries)` | Batch set position/length/volume_db/mute/fade, or delete, across many items in one call. Prefer this over looping the single-item tools above for anything more than a couple of items. |
 
 ## Takes
 
@@ -222,8 +225,9 @@ Section markers and region rendering boundaries. Source: `marker_tools.py`.
 | `marker_delete(marker_index)` | Delete a marker or region by index. |
 | `marker_edit(marker_index, position=-1, name=None)` | Rename or move a marker. |
 | `marker_go_to(marker_number)` | Move the edit cursor to a marker. |
+| `markers_apply(entries)` | Batch edit (name/position/start/end/color) or delete markers and regions in one call — also the only way to edit a region's `end` or `color`, `marker_edit` doesn't support either. |
 
-> For adding many markers at once, see `add_markers_batch` in [Composition Editing](#composition-editing).
+> For adding many markers at once, see `add_markers_batch` in [Composition Editing](#composition-editing). For batch editing/deleting existing ones, use `markers_apply` above.
 
 ## Tempo Map
 
@@ -511,6 +515,9 @@ Requires optional dependencies — install with `pip install 'reaper-mcp[analysi
 | `analyze_clipping(wav_path, threshold_db=-0.1)` | Count of samples at/above a clipping threshold, per channel and total. Default -0.1 dBFS catches anything near 0 dBTP. |
 | `analyze_frequency_spectrum(wav_path)` | Bass / low-mid / mid / high-mid / presence / brilliance energy split in dB, plus spectral centroid (brightness proxy) and a tonal-balance hint. |
 | `analyze_stereo_field(wav_path)` | Phase correlation (-1..+1), mid / side RMS, side-to-mid ratio, mono-compatibility hint. |
+| `analyze_silence(wav_path, threshold_db=-40.0, min_duration=0.3)` | Candidate silence spans (amplitude at/below `threshold_db` for at least `min_duration`). Flags candidates for review, not certainties — an intentional pause looks identical to a bad edit. |
+| `analyze_peaks(wav_path, sensitivity=3.0)` | Click/pop candidates — short transients spiking well above the local baseline, distinct from `analyze_clipping`'s absolute-threshold check. First/last ~25ms excluded (no reliable baseline right at a boundary). |
+| `analyze_region_qc(wav_path, regions)` | Runs `analyze_silence` + `analyze_peaks` scoped to each region, producing a per-region punch list. `regions` is a JSON array you populate from `marker_get_all()` yourself — this tool doesn't query REAPER. |
 
 **Typical workflow:**
 
@@ -521,6 +528,37 @@ analyze_loudness("C:/renders/mix.wav")         # did we hit -14 LUFS?
 analyze_clipping("C:/renders/mix.wav")         # any true-peak overs?
 engine_fix_mix(...)                            # correct if off-target
 ```
+
+**Post-production QC workflow:**
+
+```
+project_export_audio("C:/renders/dialogue.wav")   # render
+marker_get_all()                                   # get your region list
+analyze_region_qc("C:/renders/dialogue.wav", regions)  # per-region punch list
+```
+
+Breath detection is deliberately not included — an amplitude-only heuristic
+can't reliably tell a breath apart from quiet room tone; see `CHANGELOG.md`
+for the full reasoning. This whole feature needs real-world testing with
+post-production users before its output should be trusted as more than a
+rough first pass.
+
+## ReaScript
+
+Discover and run the user's own local ReaScripts. Source: `script_tools.py`.
+
+Discovery and execution are hard-coded to REAPER's own Scripts folder
+(`reaper.GetResourcePath() .. "/Scripts"`) — never an AI- or
+conversation-supplied path. `.lua`/`.eel` only; `.py` scripts are excluded
+(they depend on a separate `reaper_python` setup that may not be
+configured). Running a script executes arbitrary local code — treat it
+like the other destructive/hard-to-reverse actions and confirm with the
+user first, unless they've already named that exact script.
+
+| Tool | Description |
+|------|-------------|
+| `script_list(filter="")` | List `.lua`/`.eel` scripts found in the Scripts folder, with any `@description`/`@about` header comment parsed out. Capped at 300 results; `filter` narrows a larger install. |
+| `script_run(script_path, wait_seconds=5.0)` | Register (if needed) and run a script from `script_list`'s output. Waits up to `wait_seconds` for the script to report a result via a documented `ExtState` convention — scripts that don't opt in (or haven't finished, e.g. a background/`defer`-based script) come back with `result_found: false`. |
 
 ## Demo
 

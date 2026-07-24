@@ -210,7 +210,7 @@ Unit tests (mocked client, matching existing test conventions):
 - `tests/test_script_tools.py` — new.
 - `CONTRIBUTING.md` — brief mention alongside the external-generation-
   pipeline guidance already added this session.
-- `CHANGELOG.md` — entry under `[0.5.0]`, referencing issue #4.
+- `CHANGELOG.md` — entry under `[0.6.0]`, referencing issue #4.
 
 ## Explicitly out of scope (this pass)
 
