@@ -1,12 +1,51 @@
+import json
+
 from mcp.server.fastmcp import FastMCP
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 from reaper_mcp_shared.constants import MAX_LABEL_LENGTH
+from reaper_mcp.tools.compose_edit_tools import _validate_color_array
 
 
 def _validate_color(r: int, g: int, b: int):
     for val, name in [(r, "color_r"), (g, "color_g"), (b, "color_b")]:
         if not 0 <= val <= 255:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"{name} must be 0-255")
+
+
+_MAX_MARKERS_APPLY_ENTRIES = 200
+
+
+def _validate_markers_apply_entries(entries: list) -> None:
+    if not isinstance(entries, list) or len(entries) == 0:
+        raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "entries must be a non-empty JSON array")
+    if len(entries) > _MAX_MARKERS_APPLY_ENTRIES:
+        raise ReaperMCPError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            f"Too many entries: {len(entries)} (max {_MAX_MARKERS_APPLY_ENTRIES})",
+        )
+    for i, entry in enumerate(entries):
+        if "marker_index" not in entry:
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, f"Entry {i} missing marker_index")
+        marker_index = entry["marker_index"]
+        if not isinstance(marker_index, int) or isinstance(marker_index, bool) or marker_index < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: marker_index must be >= 0")
+        if entry.get("position") is not None and entry["position"] < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: position must be >= 0")
+        if entry.get("start") is not None and entry["start"] < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: start must be >= 0")
+        if entry.get("start") is not None and entry.get("end") is not None and entry["end"] <= entry["start"]:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: end must be greater than start")
+        if entry.get("color") is not None:
+            _validate_color_array(entry["color"], f"Entry {i}")
+        if entry.get("name") is not None and len(entry["name"]) > MAX_LABEL_LENGTH:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: Name too long (max {MAX_LABEL_LENGTH})")
+
+
+def _order_markers_apply_entries(entries: list[dict]) -> list[dict]:
+    non_deletes = [e for e in entries if e.get("delete") is not True]
+    deletes = [e for e in entries if e.get("delete") is True]
+    deletes.sort(key=lambda e: e["marker_index"], reverse=True)
+    return non_deletes + deletes
 
 
 def register(mcp: FastMCP):
