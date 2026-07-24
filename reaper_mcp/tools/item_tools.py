@@ -3,6 +3,39 @@ from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 from reaper_mcp_shared.path_safety import safe_path as _safe_path
 from reaper_mcp.safety import ensure_backup
 
+_MAX_ITEMS_APPLY_ENTRIES = 200
+
+
+def _validate_items_apply_entries(entries: list) -> None:
+    if not isinstance(entries, list) or len(entries) == 0:
+        raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "entries must be a non-empty JSON array")
+    if len(entries) > _MAX_ITEMS_APPLY_ENTRIES:
+        raise ReaperMCPError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            f"Too many entries: {len(entries)} (max {_MAX_ITEMS_APPLY_ENTRIES})",
+        )
+    for i, entry in enumerate(entries):
+        if "item_index" not in entry:
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, f"Entry {i} missing item_index")
+        item_index = entry["item_index"]
+        if not isinstance(item_index, int) or isinstance(item_index, bool) or item_index < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: item_index must be >= 0")
+        if entry.get("fade_in") is not None and entry["fade_in"] < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: fade_in must be >= 0")
+        if entry.get("fade_out") is not None and entry["fade_out"] < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: fade_out must be >= 0")
+        if entry.get("length") is not None and entry["length"] <= 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: length must be > 0")
+        if entry.get("position") is not None and entry["position"] < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, f"Entry {i}: position must be >= 0")
+
+
+def _order_items_apply_entries(entries: list[dict]) -> list[dict]:
+    non_deletes = [e for e in entries if e.get("delete") is not True]
+    deletes = [e for e in entries if e.get("delete") is True]
+    deletes.sort(key=lambda e: e["item_index"], reverse=True)
+    return non_deletes + deletes
+
 
 def register(mcp: FastMCP):
     from reaper_mcp.main import client

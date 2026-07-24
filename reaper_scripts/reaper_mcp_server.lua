@@ -970,6 +970,10 @@ function project.project_get_info(p)
   }
 end
 
+function project.project_get_change_count(p)
+  return {change_count = math.floor(reaper.GetProjectStateChangeCount(0))}
+end
+
 function project.project_new(p)
   reaper.Main_OnCommand(40023, 0)
   local _, name = reaper.GetProjectName(0, "")

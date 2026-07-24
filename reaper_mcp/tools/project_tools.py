@@ -18,6 +18,17 @@ def register(mcp: FastMCP):
         return await client.execute("project_get_info")
 
     @mcp.tool()
+    async def project_get_change_count() -> dict:
+        """Cheap check for whether the project has changed since you last looked.
+
+        Returns a monotonically increasing counter that bumps on any edit.
+        Compare against a value you saved earlier to decide whether you need
+        to re-fetch heavier data (track_get_all, item_get_all) instead of
+        blindly re-querying every turn.
+        """
+        return await client.execute("project_get_change_count")
+
+    @mcp.tool()
     async def project_new() -> dict:
         """Create a new empty REAPER project. Returns the new project info."""
         return await client.execute("project_new")
