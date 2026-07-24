@@ -99,6 +99,20 @@ All notable changes to ReaperMCP will be documented in this file.
 
 ### Fixed
 
+- **`create_drum_pattern`/`create_chord_progression`/`load_loops` read the
+  auto-created item/track index from the wrong place in the bridge
+  response.** Bridge responses nest their payload under `data`
+  (`{"success":true,"data":{"index":N,...}}`), but these three call sites
+  read `index`/`item_index`/`track_index` from the top level, which is
+  always absent — so they silently fell back to `0`/`None`. In practice:
+  pattern tools always targeted project item 0 regardless of track (only
+  worked by accident on an empty project's first item; any multi-track use
+  wrote to the wrong item or failed with "Item is not on specified track"),
+  and `load_loops`' track-create path (the common case — loading into a
+  project without a pre-existing matching track name) silently loaded 0
+  loops. Fixed to read from `result["data"]` with a flat-dict fallback,
+  matching the pattern `chops_tools.py` already used. Contributed by
+  @KaseMaster (PR #5).
 - **`project_save_as` never actually saved to the given path.** Its Lua
   handler called `reaper.Main_SaveProject(0, path)` — that function's
   second argument is a boolean ("force the Save-As dialog"), not a
