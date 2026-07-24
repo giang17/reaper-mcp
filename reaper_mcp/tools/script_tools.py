@@ -1,5 +1,16 @@
+import json
+
 from mcp.server.fastmcp import FastMCP
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
+
+
+def _parse_script_result(raw: str):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw
 
 
 def _validate_script_path(script_path: str) -> str:

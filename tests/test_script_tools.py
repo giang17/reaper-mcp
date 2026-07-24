@@ -9,7 +9,7 @@ live REAPER smoke test instead, per this codebase's existing convention.
 
 import pytest
 
-from reaper_mcp.tools.script_tools import _validate_script_path
+from reaper_mcp.tools.script_tools import _validate_script_path, _parse_script_result
 from reaper_mcp_shared.error_codes import ReaperMCPError
 
 
@@ -50,3 +50,20 @@ class TestValidateScriptPath:
     def test_dotdot_disguised_with_backslash_raises(self):
         with pytest.raises(ReaperMCPError):
             _validate_script_path("sub\\..\\..\\escape.lua")
+
+
+class TestParseScriptResult:
+    def test_empty_string_returns_none(self):
+        assert _parse_script_result("") is None
+
+    def test_valid_json_object_parsed(self):
+        assert _parse_script_result('{"ok": true, "count": 3}') == {"ok": True, "count": 3}
+
+    def test_valid_json_number_parsed(self):
+        assert _parse_script_result("42") == 42
+
+    def test_non_json_string_returned_raw(self):
+        assert _parse_script_result("done!") == "done!"
+
+    def test_malformed_json_returned_raw(self):
+        assert _parse_script_result('{"unterminated": ') == '{"unterminated": '
