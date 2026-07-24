@@ -4,6 +4,19 @@ All notable changes to ReaperMCP will be documented in this file.
 
 ## [0.6.0] - Unreleased
 
+### Added
+
+- **`project_get_change_count`** — cheap check for whether the project has
+  changed since you last looked (wraps REAPER's
+  `GetProjectStateChangeCount`), so the AI can decide whether to re-fetch
+  heavier data instead of blindly re-querying every turn. (issue #4)
+- **`items_apply`** — batch set position/length/volume_db/mute/fade, or
+  delete, across many items in one call. Non-delete changes apply first;
+  deletes apply last in descending item_index order regardless of input
+  order, so a delete never shifts the indices of items processed later in
+  the same batch. Per-entry error collection — a bad item_index doesn't
+  abort the rest of the batch. (issue #4)
+
 ## [0.5.0] - 2026-07-20
 
 ### Added
