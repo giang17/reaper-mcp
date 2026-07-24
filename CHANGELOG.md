@@ -2,7 +2,7 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-07-25
 
 ### Added
 
