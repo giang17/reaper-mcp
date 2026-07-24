@@ -33,6 +33,18 @@ All notable changes to ReaperMCP will be documented in this file.
   something unreliable under the same name. This whole feature needs
   real-world testing with post-production users before its output should
   be trusted as more than a rough first pass. (issue #4)
+- **`markers_apply`** — batch edit (name/position/start/end/color) or
+  delete markers and regions in one call, closing the other half of
+  issue #4's batch-combinator request (`items_apply` covered media
+  items; this covers markers/regions — creation was already batched via
+  `add_markers_batch`, only edit/delete were still one-at-a-time). Also
+  extends marker editing to support a region's `end` and `color`, which
+  the existing single-marker `marker_edit` never supported. Non-delete
+  changes apply first; deletes apply last in descending marker_index
+  order regardless of input order, so a delete never shifts the indices
+  of markers processed later in the same batch. Per-entry error
+  collection — a bad marker_index doesn't abort the rest of the batch.
+  (issue #4)
 
 ## [0.5.0] - 2026-07-20
 
