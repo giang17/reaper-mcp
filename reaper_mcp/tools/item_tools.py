@@ -116,7 +116,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_delete(item_index: int) -> dict:
-        """Delete an item.
+        """Delete an item. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.
@@ -131,7 +131,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_move(item_index: int, new_position: float) -> dict:
-        """Move item to new position.
+        """Move item to new position. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.
@@ -145,7 +145,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_set_length(item_index: int, length: float) -> dict:
-        """Set item length.
+        """Set item length. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.
@@ -159,7 +159,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_set_volume(item_index: int, volume_db: float) -> dict:
-        """Set item volume in dB.
+        """Set item volume in dB. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.
@@ -171,7 +171,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_set_mute(item_index: int, mute: bool) -> dict:
-        """Mute/unmute item.
+        """Mute/unmute item. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.
@@ -183,7 +183,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def item_set_fade(item_index: int, fade_in: float = -1, fade_out: float = -1) -> dict:
-        """Set fade in/out. -1=unchanged.
+        """Set fade in/out. -1=unchanged. Prefer items_apply for multiple.
 
         Args:
             item_index: Item index.

@@ -26,7 +26,7 @@
 
 ---
 
-ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production through **163 tools across 25 modules** — transport, tracks, MIDI, patterns (drum / chord progressions), loop-library pipeline, **vocal chops** (end-to-end `chop_pipeline` with chillstep / future-bass / porter / trap styles, plus primitives), FX, envelopes, sidechain, mixing, mastering, bus pipelines, and objective audio analysis. Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
+ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production through **172 tools across 26 modules** — transport, tracks, MIDI, patterns (drum / chord progressions), loop-library pipeline, **vocal chops** (end-to-end `chop_pipeline` with chillstep / future-bass / porter / trap styles, plus primitives), FX, envelopes, sidechain, mixing, mastering, bus pipelines, objective audio analysis, and post-production tooling (batch item/marker editing, ReaScript discovery and execution, edit-oriented QC — silence/click candidate detection per region). Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
 
 **ReaperMCP itself runs entirely on your machine** via a file-based Lua IPC bridge inside REAPER — your project, audio, and MIDI never leave your computer. The AI "brain" naturally lives wherever you already run it: Claude Desktop / Claude Code / Cursor / Antigravity / any MCP client. You bring the AI, ReaperMCP handles REAPER.
 
@@ -271,21 +271,21 @@ Reaper-MCP/
 │   │       ├── pop.py              # 4 pop subgenres
 │   │       ├── electronic.py       # synthwave, lofi, ambient, hiphop
 │   │       └── _shared.py          # Shared role → EQ/comp library
-│   └── tools/                      # 25 modules, 163 auto-registered tools
+│   └── tools/                      # 26 modules, 172 auto-registered tools
 │       ├── transport_tools.py      # Playback and recording (11)
 │       ├── track_tools.py          # Track management + freeze (18)
 │       ├── template_tools.py       # Track templates (4)
-│       ├── project_tools.py        # Project/file operations (11)
-│       ├── item_tools.py           # Media item management (13)
+│       ├── project_tools.py        # Project/file operations (13)
+│       ├── item_tools.py           # Media item management + batch apply (14)
 │       ├── take_tools.py           # Takes (4)
 │       ├── midi_tools.py           # MIDI notes and CC (13)
 │       ├── quantize_tools.py       # Quantize / humanize / ripple (3)
-│       ├── marker_tools.py         # Markers and regions (6)
+│       ├── marker_tools.py         # Markers, regions + batch apply (7)
 │       ├── tempo_tools.py          # Tempo map markers (4)
 │       ├── envelope_tools.py       # Automation envelopes (3)
 │       ├── selection_tools.py      # Selection and loop (9)
 │       ├── send_tools.py           # Sends and routing (7)
-│       ├── fx_tools.py             # FX chain + params (14)
+│       ├── fx_tools.py             # FX chain + params (15)
 │       ├── inventory_tools.py      # fx_list_installed + set_fx_preferences (2)
 │       ├── mix_tools.py            # engine_mix / engine_master / engine_fix_mix (3)
 │       ├── sidechain_tools.py      # setup_sidechain (1)
@@ -294,7 +294,9 @@ Reaper-MCP/
 │       ├── compose_edit_tools.py   # wipe_all_midi, edit_section, rewrite_cc, … (9)
 │       ├── patterns_tools.py       # create_drum_pattern, create_chord_progression (2)
 │       ├── loops_tools.py          # scan_audio_folder, detect_common_bpm, load_loops (3)
-│       ├── analysis_tools.py       # LUFS, clipping, spectrum, stereo field (4, optional deps)
+│       ├── chops_tools.py          # Vocal chop pipeline + primitives (10)
+│       ├── analysis_tools.py       # LUFS, clipping, spectrum, stereo field, silence/peak/region QC (7, optional deps)
+│       ├── script_tools.py         # ReaScript discovery + execution (2)
 │       ├── demo_tools.py           # demo_edm_project (1)
 │       └── compose_helpers.py      # Shared helpers (no tools)
 ├── reaper_mcp_shared/

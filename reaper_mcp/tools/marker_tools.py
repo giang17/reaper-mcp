@@ -100,7 +100,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def marker_delete(marker_index: int) -> dict:
-        """Delete marker/region.
+        """Delete marker/region. Prefer markers_apply for multiple.
 
         Args:
             marker_index: Index from marker_get_all.
@@ -111,7 +111,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def marker_edit(marker_index: int, position: float = -1, name: str | None = None) -> dict:
-        """Edit marker/region.
+        """Edit marker/region. Prefer markers_apply for multiple, or to also edit a region's end/color.
 
         Args:
             marker_index: Marker index.

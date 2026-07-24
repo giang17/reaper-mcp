@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Approximate per-profile tool counts — for the startup banner. Real count
 # is the sum of @mcp.tool() registrations in each module's register().
 PROFILES: dict[str, set[str] | None] = {
-    # `full` — everything. Default. ~163 tools across 25 modules.
+    # `full` — everything. Default. ~172 tools across 26 modules.
     "full": None,
     # `composition` — write / edit music. Drops FX, mix, sidechain, analysis.
     "composition": {
