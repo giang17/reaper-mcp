@@ -302,6 +302,72 @@ def register(mcp: FastMCP):
         }
 
     @mcp.tool()
+    async def analyze_silence(wav_path: str, threshold_db: float = -40.0, min_duration: float = 0.3) -> dict:
+        """Find candidate silence spans — amplitude at/below threshold_db for at least min_duration.
+
+        Flags candidates for review; does not claim certainty (e.g. an
+        intentional dramatic pause looks identical to a bad edit here).
+
+        Args:
+            wav_path: Path to a rendered WAV file.
+            threshold_db: Silence threshold in dBFS. Must be <= 0. Default -40.0.
+            min_duration: Minimum span length in seconds to flag. Default 0.3.
+        """
+        if threshold_db > 0:
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "threshold_db must be <= 0")
+        if min_duration <= 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "min_duration must be > 0")
+        samples, sr = _load_wav(wav_path)
+        mono = _to_mono(samples.astype(np.float64))
+        candidates = _find_silence_candidates(mono, sr, threshold_db, min_duration)
+        total_silence = round(sum(c["duration_sec"] for c in candidates), 3)
+        hint = (
+            "No silence candidates found."
+            if not candidates
+            else f"{len(candidates)} silence candidate(s) found ({total_silence}s total)."
+        )
+        return {
+            "threshold_db": threshold_db,
+            "min_duration": min_duration,
+            "candidates": candidates,
+            "total_silence_sec": total_silence,
+            "hint": hint,
+        }
+
+    @mcp.tool()
+    async def analyze_peaks(wav_path: str, sensitivity: float = 3.0) -> dict:
+        """Find click/pop candidates — short transients that spike well above the local baseline.
+
+        Distinct from analyze_clipping (which catches sustained over-threshold
+        content): this looks for isolated spikes against the surrounding
+        signal, the actual signature of a click/pop rather than a loud
+        musical passage. The first/last ~25ms of the file are excluded from
+        detection — there's no reliable local baseline right at a boundary.
+
+        Args:
+            wav_path: Path to a rendered WAV file.
+            sensitivity: How many multiples of the local baseline counts as
+                         a candidate. Higher = fewer, more confident candidates.
+                         Must be > 0. Default 3.0.
+        """
+        if sensitivity <= 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "sensitivity must be > 0")
+        samples, sr = _load_wav(wav_path)
+        mono = _to_mono(samples.astype(np.float64))
+        candidates = _find_peak_candidates(mono, sr, sensitivity)
+        hint = (
+            "No peak/click candidates found."
+            if not candidates
+            else f"{len(candidates)} peak/click candidate(s) found — listen and trim "
+                 f"or use spectral repair if confirmed."
+        )
+        return {
+            "sensitivity": sensitivity,
+            "candidates": candidates,
+            "hint": hint,
+        }
+
+    @mcp.tool()
     async def analyze_frequency_spectrum(wav_path: str) -> dict:
         """Bass / mid / treble energy split and spectral centroid.
 
