@@ -91,6 +91,94 @@ def _peak_db(samples) -> float:
     return 20.0 * np.log10(peak)
 
 
+def _find_silence_candidates(mono, sr: int, threshold_db: float, min_duration: float) -> list:
+    if mono.size == 0:
+        return []
+    threshold_linear = 10 ** (threshold_db / 20.0)
+    below = np.abs(mono) <= threshold_linear
+    candidates = []
+    n = len(below)
+    i = 0
+    while i < n:
+        if below[i]:
+            start = i
+            while i < n and below[i]:
+                i += 1
+            end = i
+            duration = (end - start) / sr
+            if duration >= min_duration:
+                candidates.append({
+                    "start_sec": round(start / sr, 3),
+                    "end_sec": round(end / sr, 3),
+                    "duration_sec": round(duration, 3),
+                })
+        else:
+            i += 1
+    return candidates
+
+
+def _find_peak_candidates(mono, sr: int, sensitivity: float) -> list:
+    n = mono.size
+    if n == 0:
+        return []
+    abs_samples = np.abs(mono)
+    window = max(1, int(sr * 0.05))  # 50ms local baseline window
+    kernel = np.ones(window) / window
+    # Edge-pad (not zero-pad) before convolving — mode="same" implicitly
+    # zero-pads outside the array, which drags the baseline artificially low
+    # right at the start/end of the file and false-positives on ordinary
+    # audio that starts or ends at full volume (the common case).
+    left_pad = window // 2
+    right_pad = window - 1 - left_pad
+    padded = np.pad(abs_samples, (left_pad, right_pad), mode="edge")
+    baseline = np.convolve(padded, kernel, mode="valid")
+    floor = 1e-4  # absolute magnitude floor so near-zero baseline doesn't trivially flag noise
+    threshold = baseline * sensitivity + floor
+    flagged = abs_samples > threshold
+    # The first/last half-window still has no reliable local baseline no
+    # matter the padding scheme — a periodic or ramping signal right at a
+    # boundary has no stable "before" context. Exclude these edges from
+    # detection entirely rather than guessing (standard practice for
+    # windowed transient detectors).
+    half_window = window // 2
+    if half_window > 0:
+        flagged[:half_window] = False
+        if half_window < n:
+            flagged[-half_window:] = False
+
+    candidates = []
+    i = 0
+    while i < n:
+        if flagged[i]:
+            start = i
+            while i < n and flagged[i]:
+                i += 1
+            end = i
+            segment = abs_samples[start:end]
+            peak_offset = int(np.argmax(segment))
+            peak_idx = start + peak_offset
+            magnitude = float(abs_samples[peak_idx])
+            if magnitude > 0:
+                magnitude_db = round(20.0 * np.log10(magnitude), 2)
+            else:
+                magnitude_db = None
+            candidates.append({
+                "time_sec": round(peak_idx / sr, 3),
+                "magnitude_db": magnitude_db,
+            })
+        else:
+            i += 1
+    return candidates
+
+
+def _clamp_region(start: float, end: float, total_duration_sec: float) -> tuple:
+    start = max(0.0, min(start, total_duration_sec))
+    end = max(0.0, min(end, total_duration_sec))
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
 def register(mcp: FastMCP):
     if not _AVAILABLE:
         sys.stderr.write(
