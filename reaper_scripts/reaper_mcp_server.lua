@@ -2042,6 +2042,69 @@ function marker.marker_go_to(p)
   return {marker_number = math.floor(p.marker_number), cursor_position = reaper.GetCursorPosition()}
 end
 
+function marker.markers_apply(p)
+  if not p.entries then return nil, "Missing parameter: entries" end
+  local entries = json_decode(p.entries)
+  if not entries then return nil, "Invalid entries JSON" end
+
+  -- Non-delete entries first (input order), then deletes last in
+  -- descending marker_index order — matches _order_markers_apply_entries
+  -- on the Python side, done again here since Lua receives the raw
+  -- array and must be correct on its own regardless of input order.
+  local non_deletes, deletes = {}, {}
+  for _, e in ipairs(entries) do
+    if e.delete == true then
+      deletes[#deletes+1] = e
+    else
+      non_deletes[#non_deletes+1] = e
+    end
+  end
+  table.sort(deletes, function(a, b) return a.marker_index > b.marker_index end)
+
+  reaper.Undo_BeginBlock()
+  local applied = 0
+  local errors = {}
+
+  local function apply_one(idx, e)
+    local mi = math.floor(e.marker_index)
+    local count = reaper.CountProjectMarkers(0)
+    if mi < 0 or mi >= count then
+      errors[#errors+1] = {index = idx, marker_index = e.marker_index, error = "Marker not found"}
+      return
+    end
+    if e.delete == true then
+      reaper.DeleteProjectMarkerByIndex(0, mi)
+      applied = applied + 1
+      return
+    end
+    local _, isrgn, pos, rgnend, name, num, color = reaper.EnumProjectMarkers3(0, mi)
+    if e.name ~= nil then name = e.name end
+    if isrgn then
+      if e.start ~= nil then pos = e.start end
+      if e["end"] ~= nil then rgnend = e["end"] end
+    else
+      if e.position ~= nil then pos = e.position end
+    end
+    if e.color ~= nil then
+      local c, err = native_color_from_array(e.color)
+      if not c then
+        errors[#errors+1] = {index = idx, marker_index = e.marker_index, error = err}
+        return
+      end
+      color = c
+    end
+    reaper.SetProjectMarkerByIndex2(0, mi, isrgn, pos, rgnend, num, name, color, 0)
+    applied = applied + 1
+  end
+
+  for i, e in ipairs(non_deletes) do apply_one(i - 1, e) end
+  for i, e in ipairs(deletes) do apply_one(#non_deletes + i - 1, e) end
+
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("markers_apply", -1)
+  return {success = true, applied = applied, errors = errors}
+end
+
 -- ============================================================
 -- SELECTION handlers
 -- ============================================================
