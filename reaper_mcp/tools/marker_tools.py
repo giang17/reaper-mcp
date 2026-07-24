@@ -146,3 +146,30 @@ def register(mcp: FastMCP):
         if marker_number < 1:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "marker_number must be >= 1")
         return await client.execute("marker_go_to", marker_number=marker_number)
+
+    @mcp.tool()
+    async def markers_apply(entries: str) -> dict:
+        """Batch edit (name/position/start/end/color) or delete markers and regions in one call.
+
+        Args:
+            entries: JSON array. Each: {"marker_index":0, "name":"Line 12"}.
+                     Region bounds: {"marker_index":5, "start":10.0, "end":14.5}.
+                     Point marker position: {"marker_index":2, "position":8.0}.
+                     Color: {"marker_index":7, "color":[200,90,60]} (0-255 each).
+                     Delete: {"marker_index":9, "delete":true}. Only marker_index required.
+                     start/end only apply to regions, position only to point markers — a
+                     mismatched field (e.g. start/end on a point marker) is silently
+                     ignored, not an error. Non-delete changes apply first (in the order
+                     given); deletes apply last, in descending marker_index order,
+                     regardless of input order — this avoids a delete shifting the
+                     indices of markers processed later in the same batch. A bad
+                     marker_index is recorded in the response's errors array and does
+                     not abort the rest of the batch.
+        """
+        try:
+            parsed = json.loads(entries)
+        except (json.JSONDecodeError, TypeError):
+            raise ReaperMCPError(ErrorCode.INVALID_PARAMETER, "Invalid entries JSON")
+        _validate_markers_apply_entries(parsed)
+        ordered = _order_markers_apply_entries(parsed)
+        return await client.execute("markers_apply", entries=json.dumps(ordered))
