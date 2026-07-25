@@ -75,10 +75,17 @@ git clone https://github.com/xDarkzx/Reaper-MCP.git
 
 ### 2. Run the installer
 
-Open the folder and run:
+**Windows:** either double-click `install.bat` in File Explorer, or — if you're already in a terminal from the `git clone` step above — just keep going in the same PowerShell/Command Prompt window:
+```powershell
+cd Reaper-MCP
+.\install.bat
+```
 
-- **Windows:** Double-click `install.bat`
-- **macOS / Linux:** Open terminal in the folder and run `bash install.sh`
+**macOS / Linux:**
+```bash
+cd Reaper-MCP
+bash install.sh
+```
 
 > The installer installs `reaper-mcp` locally and optionally **configures Claude Desktop** — no manual JSON editing needed.
 
