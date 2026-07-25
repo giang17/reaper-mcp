@@ -24,7 +24,7 @@ with zero dependency on REAPER/Lua — every tool takes a rendered WAV path
 and returns objective metrics (LUFS, clipping, frequency balance, stereo
 field), gated behind an optional `numpy`/`soundfile`/`pyloudnorm`
 dependency (`_AVAILABLE`/`_IMPORT_ERROR` pattern, installed via
-`pip install 'reaper-mcp[analysis]'`). This feature extends that same
+`pip install -e ".[analysis]"`). This feature extends that same
 module and convention rather than introducing a new architecture.
 
 ## Scope decision: breath detection deferred

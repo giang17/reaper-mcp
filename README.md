@@ -170,7 +170,7 @@ Open your AI client and start talking:
 | **Patterns** | 2 | `create_drum_pattern` (multi-lane step-sequencer notation), `create_chord_progression` (parses `"Cm7, Fm7, Bb7, Eb"` into voiced MIDI) |
 | **Loop Library** | 3 | `scan_audio_folder` (parse BPM / key / role from filenames), `detect_common_bpm`, `load_loops` (batch-create tracks + load stems). Point at a sample-pack folder and the AI builds a track from it. |
 | **Vocal Chops** | 10 | **`chop_pipeline`** — end-to-end: reorders slices from the source vocal onto a NEW track with style-specific rhythms (chillstep / future bass / porter / trap), pitches to chord tones, stutters + harmonises + fades. **Primitives:** `item_split_at_transients`, `item_split_at_positions`, `take_set_pitch`, `take_set_playrate`, `take_set_reversed`, `item_duplicate`. **Helpers:** `analyze_chop_set`, `arrange_chops_to_chord_tones`, `stack_chop_layers`. |
-| **Audio Analysis** | 4 | `analyze_loudness` (LUFS vs. streaming/broadcast/cinema target), `analyze_clipping`, `analyze_frequency_spectrum`, `analyze_stereo_field` — objective mix metrics for `measure → correct` loops. Optional extras: `pip install 'reaper-mcp[analysis]'` |
+| **Audio Analysis** | 4 | `analyze_loudness` (LUFS vs. streaming/broadcast/cinema target), `analyze_clipping`, `analyze_frequency_spectrum`, `analyze_stereo_field` — objective mix metrics for `measure → correct` loops. Optional extras: `pip install -e ".[analysis]"` (or `pip install "xdarkzx-reaper-mcp[analysis]"` if installed from PyPI) |
 | **Demo** | 1 | `demo_edm_project` — one-shot full-project demo render (smoke test + reference) |
 
 > See **[docs/TOOLS.md](docs/TOOLS.md)** for the complete tool reference with every signature and a one-line description for each tool.
@@ -360,7 +360,7 @@ The AI will use `get_track_instruments` to detect what's loaded and compose for 
 | "Connection timeout" | REAPER is busy. Wait for it to finish, or check if the Lua script crashed (re-run it). |
 | Works once then stops | The Lua script may have stopped. Re-run it from Actions. |
 | Claude Desktop doesn't see ReaperMCP | Restart Claude Desktop after editing the config. Check `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS). |
-| "command not found: reaper-mcp" | Run the installer again, or manually: `pip install -e .` from the repo folder. |
+| "command not found: reaper-mcp" | Run the installer again, or manually: `pip install -e .` from the repo folder, or `pip install xdarkzx-reaper-mcp`. |
 | MIDI notes sound robotic | Make sure your AI is using the humanization instructions — ask it to "humanize the MIDI" or "add expression CC curves". |
 
 ---

@@ -2,12 +2,14 @@
 
 Get ReaperMCP running in 3 steps: **install ReaperMCP → load the Lua script in REAPER → connect your AI client**.
 
-All three install options below assume you start from a **cloned copy of this
-repo** — `reaper_scripts/reaper_mcp_server.lua` (the file REAPER actually
-runs) isn't published as a standalone download or bundled into the Python
-package; it only exists inside the repo. There is currently no supported
-`pip install reaper-mcp` from PyPI without the repo — always `git clone` (or
-download the repo ZIP) first.
+The Python server itself is published on PyPI as `xdarkzx-reaper-mcp` (the
+`reaper-mcp` console command name is unaffected), so `pip install
+xdarkzx-reaper-mcp` alone works for that half. But
+`reaper_scripts/reaper_mcp_server.lua` — the file REAPER actually runs —
+isn't bundled into the PyPI package or published as a standalone download;
+it only exists inside the repo. So you still need a **cloned copy of this
+repo** (or the repo ZIP) for that one file no matter which install option
+below you pick, which is why cloning first remains the simplest path.
 
 ---
 
@@ -28,6 +30,16 @@ pip install -e .
 ```
 
 This gives you the `reaper-mcp` command.
+
+### Option D: pip install from PyPI
+
+```bash
+pip install xdarkzx-reaper-mcp
+```
+
+Also gives you the `reaper-mcp` command, without needing to install from a
+local checkout — but you still need `reaper_scripts/reaper_mcp_server.lua`
+from the repo (clone it, or just download that one file) for Step 2 below.
 
 ### Option C: Run directly (no install)
 
@@ -66,7 +78,7 @@ Pick your client below. Each section shows the **complete config** — copy it a
 
 **Option A: Installed with pip** (simplest config)
 
-If you installed via `pip install -e .` or the one-click installer, your config is just:
+If you installed via `pip install -e .`, `pip install xdarkzx-reaper-mcp`, or the one-click installer, your config is just:
 
 ```json
 {
@@ -263,7 +275,7 @@ ReaperMCP needs VST instruments loaded on tracks before the AI can compose. See 
 | "No response from REAPER" | Lua script not running | Actions → Show action list → find `reaper_mcp_server.lua` → Run |
 | Script not in Actions list | Never loaded | Click **Load ReaScript...** first to register it |
 | "Connection timeout" | REAPER busy or script crashed | Wait or re-run the Lua script |
-| "command not found: reaper-mcp" | Not installed | Run `pip install -e .` from repo folder |
+| "command not found: reaper-mcp" | Not installed | Run `pip install -e .` from repo folder, or `pip install xdarkzx-reaper-mcp` |
 | Config not working | Wrong path or JSON syntax | Copy the complete example above, validate JSON at jsonlint.com |
 | Claude Desktop doesn't see ReaperMCP | Config not loaded | Restart Claude Desktop after editing config |
 | Works on Windows but not macOS | IPC dir mismatch | Check REAPER console: the Lua server prints "IPC dir: ..." on start. On macOS it should be `$TMPDIR/reaper_mcp` (e.g. `/var/folders/.../T/reaper_mcp`), NOT `/tmp/reaper_mcp`. If it shows `/tmp`, make sure you updated `reaper_mcp_server.lua` from this repo. |

@@ -508,7 +508,7 @@ The AI brings the **musical decisions** (which chord progression, where stutters
 
 Objective mix metrics from a rendered WAV. Pair with `project_export_audio` + `engine_master` for a measure → correct loop. Source: `analysis_tools.py`.
 
-Requires optional dependencies — install with `pip install 'reaper-mcp[analysis]'` (adds `numpy`, `soundfile`, `pyloudnorm`). If deps are missing, these tools simply aren't registered and the server logs a one-line hint to stderr.
+Requires optional dependencies — install with `pip install -e ".[analysis]"` (or `pip install "xdarkzx-reaper-mcp[analysis]"` if installed from PyPI) (adds `numpy`, `soundfile`, `pyloudnorm`). If deps are missing, these tools simply aren't registered and the server logs a one-line hint to stderr.
 
 | Tool | Description |
 |------|-------------|
