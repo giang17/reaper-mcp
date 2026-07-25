@@ -29,6 +29,19 @@ def register(mcp: FastMCP):
         return await client.execute("project_get_change_count")
 
     @mcp.tool()
+    async def project_get_overview() -> dict:
+        """One cheap call for post-production awareness: counts, region list, change_count, and a selection summary.
+
+        Bundles what project_get_info + marker_get_all + project_get_change_count +
+        selection_get_time + selection_get_selected_tracks + selection_get_selected_items
+        would otherwise take 6 separate calls to assemble. The selection summary
+        returns indices and counts only (not full track/item detail) to stay
+        genuinely lightweight — call selection_get_selected_tracks/items directly
+        if you need full detail on what's currently selected.
+        """
+        return await client.execute("project_get_overview")
+
+    @mcp.tool()
     async def project_new() -> dict:
         """Create a new empty REAPER project. Returns the new project info."""
         return await client.execute("project_new")

@@ -974,6 +974,61 @@ function project.project_get_change_count(p)
   return {change_count = math.floor(reaper.GetProjectStateChangeCount(0))}
 end
 
+function project.project_get_overview(p)
+  local _, name = reaper.GetProjectName(0, "")
+  local track_count = reaper.CountTracks(0)
+  local item_count = reaper.CountMediaItems(0)
+  local marker_count = reaper.CountProjectMarkers(0)
+
+  local regions = {}
+  for i = 0, marker_count - 1 do
+    local _, isrgn, pos, rgnend, rname, num = reaper.EnumProjectMarkers3(0, i)
+    if isrgn then
+      regions[#regions+1] = {
+        index = i, number = num, name = rname, start = pos, ["end"] = rgnend,
+      }
+    end
+  end
+
+  local sel_track_count = reaper.CountSelectedTracks(0)
+  local selected_track_indices = {}
+  for i = 0, sel_track_count - 1 do
+    local tr = reaper.GetSelectedTrack(0, i)
+    selected_track_indices[#selected_track_indices+1] =
+      math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER") - 1)
+  end
+
+  local sel_item_count = reaper.CountSelectedMediaItems(0)
+  local selected_item_indices = {}
+  for i = 0, sel_item_count - 1 do
+    local it = reaper.GetSelectedMediaItem(0, i)
+    for gi = 0, item_count - 1 do
+      if reaper.GetMediaItem(0, gi) == it then
+        selected_item_indices[#selected_item_indices+1] = gi
+        break
+      end
+    end
+  end
+
+  local t_start, t_end = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+
+  return {
+    name = name,
+    track_count = track_count,
+    item_count = item_count,
+    marker_count = marker_count,
+    regions = regions,
+    change_count = math.floor(reaper.GetProjectStateChangeCount(0)),
+    selection = {
+      selected_track_count = sel_track_count,
+      selected_track_indices = selected_track_indices,
+      selected_item_count = sel_item_count,
+      selected_item_indices = selected_item_indices,
+      time_selection = {start = t_start, ["end"] = t_end, length = t_end - t_start},
+    },
+  }
+end
+
 function project.project_new(p)
   reaper.Main_OnCommand(40023, 0)
   local _, name = reaper.GetProjectName(0, "")
