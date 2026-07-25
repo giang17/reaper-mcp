@@ -75,6 +75,15 @@ macOS/Linux almost always have git already — `git --version` to check, or `bre
 git clone https://github.com/xDarkzx/Reaper-MCP.git
 ```
 
+**Option C:** Already have Python? Install the published package straight from PyPI:
+```bash
+pip install xdarkzx-reaper-mcp
+```
+This gives you the `reaper-mcp` command directly — but you'll still need
+`reaper_scripts/reaper_mcp_server.lua` for Step 3 below, since that one
+file isn't bundled into the PyPI package (grab it from the repo, or
+[download it directly](https://github.com/xDarkzx/Reaper-MCP/raw/main/reaper_scripts/reaper_mcp_server.lua)).
+
 ### 2. Run the installer
 
 **Windows:** either double-click `install.bat` in File Explorer, or — if you're already in a terminal from the `git clone` step above — just keep going in the same PowerShell/Command Prompt window:
@@ -94,7 +103,7 @@ bash install.sh
 <details>
 <summary>Manual install / other MCP clients (Cursor, Claude Code, etc.)</summary>
 
-Install manually with `pip install -e .` from the repo folder and add to your client's MCP config:
+Install manually with `pip install -e .` from the repo folder (or `pip install xdarkzx-reaper-mcp` from PyPI) and add to your client's MCP config:
 
 ```json
 {
