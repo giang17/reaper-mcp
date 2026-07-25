@@ -45,6 +45,14 @@ All notable changes to ReaperMCP will be documented in this file.
   of markers processed later in the same batch. Per-entry error
   collection — a bad marker_index doesn't abort the rest of the batch.
   (issue #4)
+- **`project_get_overview`** — one cheap call bundling track/item/marker
+  counts, the region list, `change_count`, and a lightweight selection
+  summary (indices/counts, not full detail). Closes a gap found
+  re-auditing issue #4 item 1: the original request asked for this as a
+  cheap single read, but the shipped implementation required composing
+  up to 6 separate calls to assemble the same picture. Purely additive —
+  every existing granular tool (`project_get_info`, `marker_get_all`,
+  `selection_get_*`) is unchanged. (issue #4)
 
 ## [0.5.0] - 2026-07-20
 
