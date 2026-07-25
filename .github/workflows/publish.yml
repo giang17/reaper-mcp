@@ -7,10 +7,12 @@ name: Publish to PyPI
 # to trust this exact workflow in this exact repo, so GitHub can prove its
 # identity to PyPI without a shared secret to store, rotate, or leak.
 #
-# Package name on PyPI is "reapermcp" — "reaper-mcp" was already taken by an
-# unrelated project. The console command stays "reaper-mcp" either way
-# ([project.scripts] in pyproject.toml), so install docs / MCP client
-# configs referencing that command are unaffected.
+# Package name on PyPI is "xdarkzx-reaper-mcp" — "reaper-mcp" was already
+# taken by an unrelated project, and PyPI's anti-typosquatting check
+# rejected the plain "reapermcp" variant as too similar to it. The console
+# command stays "reaper-mcp" either way ([project.scripts] in
+# pyproject.toml), so install docs / MCP client configs referencing that
+# command are unaffected.
 "on":
   push:
     tags:
