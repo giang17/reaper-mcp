@@ -383,5 +383,6 @@ else
     echo ""
 fi
 echo " Docs: https://github.com/xDarkzx/Reaper-MCP"
+echo " If this is useful to you, a star on GitHub helps other people find it!"
 echo " ============================================"
 echo ""
