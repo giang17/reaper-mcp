@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for every MCP tool exposed by ReaperMCP — **172 tools across 26 modules**. Grouped by domain; each tool links to its source module.
+Complete reference for every MCP tool exposed by ReaperMCP — **173 tools across 26 modules**. Grouped by domain; each tool links to its source module.
 
 > All tools are async. Numeric inputs are range-validated before being sent to REAPER. Track/item indices are 0-based.
 
@@ -12,11 +12,11 @@ Set `REAPER_MCP_PROFILE=<name>` in your MCP client's server config to register o
 
 | Profile | Modules | Approx. tools | Use when |
 |---------|--------:|--------------:|----------|
-| `full` | 26 | 172 | Default. You're on Claude / GPT-4 / Gemini-class models. |
-| `composition` | 17 | ~129 | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
+| `full` | 26 | 173 | Default. You're on Claude / GPT-4 / Gemini-class models. |
+| `composition` | 17 | ~130 | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
 | `mixing` | 10 | ~71 | Mixing / mastering / bus pipelines. Drops MIDI / composition. |
-| `analysis` | 5 | ~52 | Inspect and measure only. Read-mostly workflow. |
-| `minimal` | 3 | ~42 | Smoke test / basic control surface. |
+| `analysis` | 5 | ~53 | Inspect and measure only. Read-mostly workflow. |
+| `minimal` | 3 | ~43 | Smoke test / basic control surface. |
 
 **How to set it — Claude Desktop / Cursor / any MCP client with env support:**
 
@@ -138,6 +138,7 @@ Project lifecycle, save/load, rendering, undo. Source: `project_tools.py`.
 |------|-------------|
 | `project_get_info()` | Project path, length, BPM, time signature, sample rate. |
 | `project_get_change_count()` | Cheap counter that bumps on any edit — check it before re-fetching heavier data (`track_get_all`, `item_get_all`) instead of blindly re-querying every turn. |
+| `project_get_overview()` | One call for counts + region list + change_count + a selection summary — start here for post-production work instead of composing `project_get_info` + `marker_get_all` + `selection_get_*` yourself. |
 | `project_new()` | Create a new empty project. |
 | `project_open(path)` | Open a project file. |
 | `project_save()` | Save the current project. |

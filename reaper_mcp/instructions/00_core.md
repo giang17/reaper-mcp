@@ -198,6 +198,16 @@ For humanization, quantization, or scale-snapping: do it manually via `midi_set_
 These support dialogue/podcast/game-audio editing workflows, not just music
 composition.
 
+## Start here — `project_get_overview()`
+Before doing post-production work on a project you haven't just queried,
+call this first. One call gets track/item/marker counts, the region
+list, `change_count`, and a selection summary — cheaper than composing
+`project_get_info` + `marker_get_all` + `selection_get_*` yourself, and
+it's what tells you whether you even need to re-read anything else this
+turn. Only fall back to the individual tools below when you need detail
+`project_get_overview()` doesn't carry (e.g. full track/item objects for
+what's selected, not just indices).
+
 ## Batch item/marker edits — `items_apply` / `markers_apply`
 Editing more than a couple of items or markers/regions one call at a time
 is slow and burns tokens. Use these instead of looping `item_move` /

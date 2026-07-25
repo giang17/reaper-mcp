@@ -29,7 +29,7 @@
 
 ---
 
-ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production through **172 tools across 26 modules** — transport, tracks, MIDI, patterns (drum / chord progressions), loop-library pipeline, **vocal chops** (end-to-end `chop_pipeline` with chillstep / future-bass / porter / trap styles, plus primitives), FX, envelopes, sidechain, mixing, mastering, bus pipelines, objective audio analysis, and post-production tooling (batch item/marker editing, ReaScript discovery and execution, edit-oriented QC — silence/click candidate detection per region). Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
+ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production through **173 tools across 26 modules** — transport, tracks, MIDI, patterns (drum / chord progressions), loop-library pipeline, **vocal chops** (end-to-end `chop_pipeline` with chillstep / future-bass / porter / trap styles, plus primitives), FX, envelopes, sidechain, mixing, mastering, bus pipelines, objective audio analysis, and post-production tooling (batch item/marker editing, ReaScript discovery and execution, edit-oriented QC — silence/click candidate detection per region). Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
 
 **ReaperMCP itself runs entirely on your machine** via a file-based Lua IPC bridge inside REAPER — your project, audio, and MIDI never leave your computer. The AI "brain" naturally lives wherever you already run it: Claude Desktop / Claude Code / Cursor / Antigravity / any MCP client. You bring the AI, ReaperMCP handles REAPER.
 
@@ -175,15 +175,15 @@ Open your AI client and start talking:
 
 ### Tool profiles
 
-The default 172-tool surface is designed for full-featured frontier models. Smaller/cheaper models (Groq Llama 3 caps at 128 tools, some local models lower still) will silently truncate. Set `REAPER_MCP_PROFILE` in your client's server config to pick a workflow-specific subset:
+The default 173-tool surface is designed for full-featured frontier models. Smaller/cheaper models (Groq Llama 3 caps at 128 tools, some local models lower still) will silently truncate. Set `REAPER_MCP_PROFILE` in your client's server config to pick a workflow-specific subset:
 
 | Profile | Tools | For |
 |---------|------:|-----|
-| `full` *(default)* | ~172 | Frontier models — Claude, GPT-4, Gemini |
-| `composition` | ~129 | Writing / editing music (includes patterns, loops, batch item/marker edits, ReaScript) |
+| `full` *(default)* | ~173 | Frontier models — Claude, GPT-4, Gemini |
+| `composition` | ~130 | Writing / editing music (includes patterns, loops, batch item/marker edits, ReaScript) |
 | `mixing` | ~71 | Mixing, mastering, bus pipelines |
-| `analysis` | ~52 | Inspect + measure only |
-| `minimal` | ~42 | Smoke test / basic control |
+| `analysis` | ~53 | Inspect + measure only |
+| `minimal` | ~43 | Smoke test / basic control |
 
 ```json
 {
@@ -281,7 +281,7 @@ Reaper-MCP/
 │   │       ├── pop.py              # 4 pop subgenres
 │   │       ├── electronic.py       # synthwave, lofi, ambient, hiphop
 │   │       └── _shared.py          # Shared role → EQ/comp library
-│   └── tools/                      # 26 modules, 172 auto-registered tools
+│   └── tools/                      # 26 modules, 173 auto-registered tools
 │       ├── transport_tools.py      # Playback and recording (11)
 │       ├── track_tools.py          # Track management + freeze (18)
 │       ├── template_tools.py       # Track templates (4)

@@ -53,7 +53,8 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def marker_get_all() -> dict:
-        """Get all markers and regions."""
+        """Get all markers and regions. For just the region list plus a cheap
+        project overview, prefer project_get_overview() instead."""
         return await client.execute("marker_get_all")
 
     @mcp.tool()

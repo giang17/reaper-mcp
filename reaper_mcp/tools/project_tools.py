@@ -11,6 +11,10 @@ def register(mcp: FastMCP):
     async def project_get_info() -> dict:
         """Get project info (name, BPM, time sig, tracks, length, markers, render settings).
 
+        For post-production work, prefer project_get_overview() instead —
+        one call for this plus the region list, change_count, and a
+        selection summary, versus composing several calls yourself.
+
         `path` is the recording/media directory (exists even for a brand
         new, never-saved project). `file_path` is the actual .rpp project
         file's path — empty string if this project has never been saved.
