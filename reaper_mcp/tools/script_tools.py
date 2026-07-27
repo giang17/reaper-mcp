@@ -63,11 +63,19 @@ def register(mcp: FastMCP):
         (relative to the Scripts folder — pass this straight to script_run)
         and description (parsed from an @description/@about header comment
         if present, empty string otherwise). Capped at 300 results; use
-        filter (case-insensitive substring match against path + description)
-        to narrow a larger install.
+        filter (case-insensitive substring match against path only — not
+        description) to narrow a larger install.
+
+        filter matches path, not description: description requires opening
+        and reading the file, which only happens for scripts that already
+        matched by path. Installs with large community script packs (a few
+        thousand .lua files) would otherwise take minutes to filter. If you
+        can't find a script by keyword, its path may not contain that
+        keyword even though its description does — try a shorter/different
+        substring or browse by folder instead.
 
         Args:
-            filter: Optional case-insensitive substring filter.
+            filter: Optional case-insensitive substring filter (matches path only).
         """
         return await client.execute("script_list", filter=filter)
 

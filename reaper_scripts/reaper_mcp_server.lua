@@ -4473,9 +4473,15 @@ local function scan_scripts_dir(base, rel, filter, results, max_results)
     if not fname then break end
     if reascript_ext_ok(fname) then
       local rel_path = (rel == "" and fname or (rel .. "/" .. fname))
-      local full_path = base .. "/" .. fname
-      local description = parse_script_header(full_path)
-      if filter == "" or rel_path:lower():find(filter, 1, true) or description:lower():find(filter, 1, true) then
+      -- Filter against the path BEFORE opening the file — parse_script_header
+      -- does a real file open/read per script, which is fine for a handful
+      -- of matches but far too slow to run unconditionally on installs with
+      -- thousands of scripts (community packs like ReaTeam's routinely have
+      -- 5-10k .lua files). This means filter only matches path, not
+      -- description text — see script_list's docstring on the Python side.
+      if filter == "" or rel_path:lower():find(filter, 1, true) then
+        local full_path = base .. "/" .. fname
+        local description = parse_script_header(full_path)
         results[#results+1] = {path = rel_path, description = description}
         if #results >= max_results then return end
       end
@@ -4486,9 +4492,14 @@ local function scan_scripts_dir(base, rel, filter, results, max_results)
   while true do
     local subdir = reaper.EnumerateSubdirectories(base, j)
     if not subdir then break end
-    local rel_sub = (rel == "" and subdir or (rel .. "/" .. subdir))
-    scan_scripts_dir(base .. "/" .. subdir, rel_sub, filter, results, max_results)
-    if #results >= max_results then return end
+    -- Skip hidden/VCS directories (.git, .svn, .hg, ...) — community script
+    -- packs are often git checkouts, and recursing into .git's object tree
+    -- adds thousands of extra directory listings for zero .lua/.eel files.
+    if subdir:sub(1, 1) ~= "." then
+      local rel_sub = (rel == "" and subdir or (rel .. "/" .. subdir))
+      scan_scripts_dir(base .. "/" .. subdir, rel_sub, filter, results, max_results)
+      if #results >= max_results then return end
+    end
     j = j + 1
   end
 end

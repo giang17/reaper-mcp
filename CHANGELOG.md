@@ -2,6 +2,20 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [0.6.1] - 2026-07-28
+
+### Fixed
+
+- **`script_list` froze REAPER's UI for minutes on large Scripts
+  installations** (thousands of community scripts, e.g. the ReaTeam pack).
+  It parsed every matching script's header (a real file open/read) before
+  checking the filter, so a filtered search never hit the 300-result cap
+  and ended up opening every single file. Now filters against the path
+  first and only parses headers for matches — filter no longer matches
+  against description text, only path, which is the trade-off that makes
+  this fast. Also skips hidden/VCS directories (`.git`, `.svn`, ...) during
+  the scan, since community packs are often git checkouts. (issue #4)
+
 ## [0.6.0] - 2026-07-25
 
 ### Added
