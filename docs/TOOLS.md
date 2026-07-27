@@ -558,7 +558,7 @@ user first, unless they've already named that exact script.
 
 | Tool | Description |
 |------|-------------|
-| `script_list(filter="")` | List `.lua`/`.eel` scripts found in the Scripts folder, with any `@description`/`@about` header comment parsed out. Capped at 300 results; `filter` narrows a larger install. |
+| `script_list(filter="")` | List `.lua`/`.eel` scripts found in the Scripts folder, with any `@description`/`@about` header comment parsed out. Capped at 300 results; `filter` narrows a larger install by matching against the script's path only (not its description — header parsing is skipped for non-matches, which is what keeps this fast on installs with thousands of community scripts). |
 | `script_run(script_path, wait_seconds=5.0)` | Register (if needed) and run a script from `script_list`'s output. Waits up to `wait_seconds` for the script to report a result via a documented `ExtState` convention — scripts that don't opt in (or haven't finished, e.g. a background/`defer`-based script) come back with `result_found: false`. |
 
 ## Demo
