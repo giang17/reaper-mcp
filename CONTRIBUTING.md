@@ -94,6 +94,11 @@ generation and import together?
 Prefer the AI-orchestrated shape unless you have a concrete, measured
 reason not to.
 
+[SongForge-MCP](https://github.com/xDarkzx/SongForge-MCP) is a working
+example of this pattern — a separate, local vocal/instrumental generation
+server (no cloud service involved) whose output is meant to be imported
+via reaper-mcp's own tools, AI-orchestrated rather than server-to-server.
+
 ## Running local ReaScripts
 
 `script_tools.py` gives the AI a path to executing the user's own local

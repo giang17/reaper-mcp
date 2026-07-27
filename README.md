@@ -238,6 +238,12 @@ The AI writes every note, rhythm, CC curve, and keyswitch itself using the granu
 
 ---
 
+## Works well alongside SongForge-MCP
+
+Need vocals or a full backing track and don't want to record or license anything? [SongForge-MCP](https://github.com/xDarkzx/SongForge-MCP) is a companion MCP server that generates original vocal + instrumental tracks locally (powered by ACE-Step 1.5 — no cloud service, no subscription, no account) and can split out an isolated vocal stem. Run both servers in the same Claude Desktop session: generate the track there, then import, arrange, and produce it further here without leaving the conversation.
+
+---
+
 ## Architecture
 
 ```
