@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.xDarkzx/reaper-mcp -->
 <h1 align="center">ReaperMCP</h1>
 
 <p align="center">
