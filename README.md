@@ -152,19 +152,19 @@ Open your AI client and start talking:
 
 ## Features
 
-### 163 Tools Across 25 Modules
+### 173 Tools Across 26 Modules
 
 | Category | Tools | Highlights |
 |----------|------:|------------|
 | **Transport** | 11 | Play, stop, pause, record, set BPM, time signature, playrate, toggle repeat/metronome |
 | **Tracks** | 18 | Create, delete, rename, volume, pan, mute, solo, arm, colour, input, folder, mixer state, peak meter, freeze/unfreeze |
 | **Track Templates** | 4 | Save, apply, list, and delete REAPER track templates |
-| **Project** | 11 | New, open, save, export audio (WAV/MP3/OGG/FLAC/AIFF), undo/redo, notes, grid |
-| **Items** | 13 | Get/select/split/delete/move items, set length/volume/mute/fade, insert media, create MIDI |
+| **Project** | 14 | New, open, save, save-as, backup, export audio (WAV/MP3/OGG/FLAC/AIFF), undo/redo, notes, grid, `project_get_overview` (change count + info in one call) |
+| **Items** | 14 | Get/select/split/delete/move items, set length/volume/mute/fade, insert media, create MIDI, move to track, `items_apply` (batch edits) |
 | **Takes** | 4 | List, add, delete, and switch active take |
 | **MIDI** | 13 | Insert notes (single/batch), edit/delete notes, insert/delete CC, count events, note names, sort, set extents (CC reading intentionally omitted — see below) |
 | **MIDI Quantize / Humanize** | 3 | `midi_quantize`, `midi_humanize`, `project_set_ripple_mode` |
-| **Markers & Regions** | 6 | Add markers/regions, delete, edit, navigate (+ `add_markers_batch` in Composition Editing) |
+| **Markers & Regions** | 7 | Add markers/regions, delete, edit, navigate, `markers_apply` (batch marker edits) |
 | **Tempo Map** | 4 | Add/delete/list tempo markers, clear all |
 | **Envelopes** | 3 | Read, write, and clear automation envelopes (track / item / FX-param) |
 | **Selection** | 9 | Time selection, loop points, select/deselect all items/tracks, get selected |
@@ -179,7 +179,8 @@ Open your AI client and start talking:
 | **Patterns** | 2 | `create_drum_pattern` (multi-lane step-sequencer notation), `create_chord_progression` (parses `"Cm7, Fm7, Bb7, Eb"` into voiced MIDI) |
 | **Loop Library** | 3 | `scan_audio_folder` (parse BPM / key / role from filenames), `detect_common_bpm`, `load_loops` (batch-create tracks + load stems). Point at a sample-pack folder and the AI builds a track from it. |
 | **Vocal Chops** | 10 | **`chop_pipeline`** — end-to-end: reorders slices from the source vocal onto a NEW track with style-specific rhythms (chillstep / future bass / porter / trap), pitches to chord tones, stutters + harmonises + fades. **Primitives:** `item_split_at_transients`, `item_split_at_positions`, `take_set_pitch`, `take_set_playrate`, `take_set_reversed`, `item_duplicate`. **Helpers:** `analyze_chop_set`, `arrange_chops_to_chord_tones`, `stack_chop_layers`. |
-| **Audio Analysis** | 4 | `analyze_loudness` (LUFS vs. streaming/broadcast/cinema target), `analyze_clipping`, `analyze_frequency_spectrum`, `analyze_stereo_field` — objective mix metrics for `measure → correct` loops. Optional extras: `pip install -e ".[analysis]"` (or `pip install "xdarkzx-reaper-mcp[analysis]"` if installed from PyPI) |
+| **Audio Analysis** | 7 | `analyze_loudness` (LUFS vs. streaming/broadcast/cinema target), `analyze_clipping`, `analyze_silence`, `analyze_peaks`, `analyze_region_qc` (edit-oriented QC — silence/click candidates per region), `analyze_frequency_spectrum`, `analyze_stereo_field`. Optional extras: `pip install -e ".[analysis]"` (or `pip install "xdarkzx-reaper-mcp[analysis]"` if installed from PyPI) |
+| **Script** | 2 | `script_list`, `script_run` — discover and execute ReaScript files in the project's Scripts tree |
 | **Demo** | 1 | `demo_edm_project` — one-shot full-project demo render (smoke test + reference) |
 
 > See **[docs/TOOLS.md](docs/TOOLS.md)** for the complete tool reference with every signature and a one-line description for each tool.
