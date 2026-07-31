@@ -237,10 +237,19 @@ def register(mcp: FastMCP):
         start_time: float,
         end_time: float,
     ) -> dict:
-        """Replace CC automation in a time range, leaving notes untouched. Use cc_curves templates preferred.
+        """Replace CC automation in a time range, leaving notes untouched.
+
+        Write curves as explicit CC points — there are no curve templates.
+        For a crescendo, insert a series of points with rising cc_value;
+        the resolution is up to you (e.g. one point every half bar).
 
         Args:
-            tracks: JSON array. Each: {"track_index":0, "cc_curves":[{"template":"strings_legato_warm","start":0,"end":10}]}. Or "all".
+            tracks: JSON array. Each: {"track_index":0, "ccs":[{"cc_number":1,
+                    "cc_value":64, "position":0.0, "channel":0}]}. Or "all".
+                    position is in seconds. Entries missing any of cc_number/
+                    cc_value/position are skipped silently, so a malformed
+                    array still reports success with ccs_inserted: 0 — check
+                    that count rather than the success flag.
             start_time: Range start in seconds.
             end_time: Range end in seconds.
         """

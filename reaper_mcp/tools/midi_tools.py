@@ -232,7 +232,7 @@ def register(mcp: FastMCP):
         cc_value: int,
         position: float,
     ) -> dict:
-        """Insert single CC event. For composing use cc_curves in compose_arrangement or rewrite_cc.
+        """Insert single CC event. For whole curves use the `ccs` array of rewrite_cc or compose_arrangement.
 
         Args:
             track_index: 0-based track index.
