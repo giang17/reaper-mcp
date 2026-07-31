@@ -9,9 +9,19 @@ def register(mcp: FastMCP):
     async def fx_add(track_index: int, fx_name: str) -> dict:
         """Add FX plugin to track. Prefer setup_fx_chain for batch operations.
 
+        The name is passed straight to REAPER's TrackFX_AddByName, which
+        resolves it fuzzily. Plugin format cannot be selected: pass the bare
+        name only. The display prefixes from fx_list_installed ("VSTi: ",
+        "VST3i: ") are not format selectors — they are matched as part of the
+        fuzzy string and silently resolve to whichever format REAPER prefers,
+        normally VST3. REAPER's own "vst:"/"vst3:" prefixes and the raw .dll
+        filename both fail outright with FX not found. So when a plugin is
+        installed as both VST2 and VST3, fx_list_installed will list both but
+        only one is reachable here.
+
         Args:
             track_index: 0-based track index.
-            fx_name: Plugin name (e.g. "ReaEQ", "ReaComp").
+            fx_name: Bare plugin name (e.g. "ReaEQ", "ReaComp", "ARIA Player").
         """
         if track_index < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
