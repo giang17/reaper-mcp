@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#why-reapermcp">Why ReaperMCP?</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="docs/TOOLS.md">Tools Reference</a> &bull;
   <a href="docs/ARCHITECTURE.md">Architecture</a> &bull;
@@ -30,9 +31,11 @@
 
 ---
 
-ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production through **173 tools across 26 modules** — transport, tracks, MIDI, patterns (drum / chord progressions), loop-library pipeline, **vocal chops** (end-to-end `chop_pipeline` with chillstep / future-bass / porter / trap styles, plus primitives), FX, envelopes, sidechain, mixing, mastering, bus pipelines, objective audio analysis, and post-production tooling (batch item/marker editing, ReaScript discovery and execution, edit-oriented QC — silence/click candidate detection per region). Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
+ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reaper.fm/), giving it full control over music production. Talk to your AI assistant and it composes, mixes, masters, and *measures* your music in real-time — the AI chooses every note, rhythm, and CC itself.
 
-**ReaperMCP itself runs entirely on your machine** via a file-based Lua IPC bridge inside REAPER — your project, audio, and MIDI never leave your computer. The AI "brain" naturally lives wherever you already run it: Claude Desktop / Claude Code / Cursor / Antigravity / any MCP client. You bring the AI, ReaperMCP handles REAPER.
+**173 tools across 26 modules** cover the full workflow: MIDI composition and patterns, a vocal-chop pipeline, FX and automatic genre-tuned mixing/mastering (35 style profiles), sends and routing, and post-production QC — batch editing, ReaScript automation, silence/click detection.
+
+**No cloud. Nothing leaves your machine.** ReaperMCP runs entirely locally through a file-based Lua IPC bridge inside REAPER — your project, audio, and MIDI stay on your computer. Bring whatever AI client you already use (Claude Desktop, Claude Code, Cursor, any MCP client) — ReaperMCP handles REAPER.
 
 **If this is useful to you, a star helps other people find it** — that's the whole marketing budget for this project.
 
@@ -49,6 +52,15 @@ ReaperMCP works with any AI client that supports the [Model Context Protocol](ht
 - [Cursor](https://www.cursor.com/) — AI code editor with MCP support
 - [LM Studio](https://lmstudio.ai/) — run local models with MCP tool access
 - Any other [MCP-compatible client](https://modelcontextprotocol.io/clients)
+
+---
+
+## Why ReaperMCP?
+
+- **Deep control, not just playback.** Most AI-audio integrations expose basic transport — play, stop, record. ReaperMCP exposes REAPER's actual production surface: genre-aware automatic mixing/mastering across 35 style profiles, a vocal-chop pipeline, drum-pattern and chord-progression shorthand, and post-production QC. The AI can produce a track end-to-end, not just push buttons on one you already made.
+- **100% local.** No cloud calls, no API keys, nothing leaves your machine — REAPER and the AI talk over a file-based bridge on disk, not a server you don't control.
+- **Actively maintained.** CI runs the full test suite across 3 OS × 4 Python versions on every change. Issues get read, discussed, and shipped — not just filed and forgotten.
+- **Composable with companion tools.** Pairs with [SongForge-MCP](https://github.com/xDarkzx/SongForge-MCP) (local AI music/vocal generation) and [Audacity-MCP](https://github.com/xDarkzx/Audacity-MCP) (audio cleanup, mastering, and local transcription) — generate, produce, and clean up without leaving the same AI conversation.
 
 ---
 
