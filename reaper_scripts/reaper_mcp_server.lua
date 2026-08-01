@@ -1106,6 +1106,74 @@ function project.project_set_notes(p)
   return {notes = stored}
 end
 
+-- ---- Project render metadata (RENDER_METADATA) ----
+-- REAPER stores per-render metadata (title, artist, album, ...) via the
+-- "RENDER_METADATA" string descriptor of GetSetProjectInfo_String. These
+-- values feed render-filename templates ($title, $artist) and are embedded
+-- as tags (ID3/BWF/Vorbis/APE) into rendered files.
+--
+-- Format, verified empirically on REAPER 7.78/linux:
+--   * SET  : one "TAG|value" pair per call; the API honors only the FIRST
+--            pair if several are concatenated in one string. Setting is
+--            ADDITIVE — new tags do not erase previously set ones.
+--   * GET  : returns a semicolon-separated list of tag NAMES that currently
+--            hold a value (e.g. "ID3:TIT2;ID3:TPE1"). The VALUES themselves
+--            are write-only — no descriptor exposes them back.
+--   * CLEAR: set "TAG|" with an empty value to remove a single tag.
+-- Each logical field maps to every tag format REAPER can embed, so the value
+-- survives regardless of the chosen render format (mp3/flac/ape/...).
+local METADATA_TAG_MAP = {
+  title        = {"ID3:TIT2", "VORBIS:TITLE",        "APE:Title"},
+  author       = {"ID3:TPE1", "VORBIS:ARTIST",       "APE:Artist"},
+  album        = {"ID3:TALB", "VORBIS:ALBUM",        "APE:Album"},
+  comment      = {"ID3:COMM", "VORBIS:COMMENT",      "APE:Comment"},
+  genre        = {"ID3:TCON", "VORBIS:GENRE",        "APE:Genre"},
+  year         = {"ID3:TYER", "VORBIS:DATE"},
+  track_number = {"ID3:TRCK", "VORBIS:TRACKNUMBER"},
+  composer     = {"ID3:TCOM", "VORBIS:COMPOSER",     "APE:Composer"},
+  isrc         = {"ID3:TSRC", "VORBIS:ISRC",         "APE:ISRC"},
+  copyright    = {"ID3:TCOP", "APE:Copyright"},
+}
+-- reverse lookup: any known tag -> its logical field
+local METADATA_TAG_TO_FIELD = {}
+for _field, _tags in pairs(METADATA_TAG_MAP) do
+  for _, _tag in ipairs(_tags) do METADATA_TAG_TO_FIELD[_tag] = _field end
+end
+
+function project.project_get_metadata(p)
+  local raw = select(2, reaper.GetSetProjectInfo_String(0, "RENDER_METADATA", "", false)) or ""
+  local tags_present = {}
+  local fields_set = {}
+  for tag in raw:gmatch("[^;]+") do
+    if tag ~= "" then
+      tags_present[#tags_present+1] = tag
+      local field = METADATA_TAG_TO_FIELD[tag]
+      if field then fields_set[field] = true end
+    end
+  end
+  return {
+    raw = raw,
+    tags_present = tags_present,
+    fields_set = fields_set,
+  }
+end
+
+function project.project_set_metadata(p)
+  local written = {}
+  for field, tags in pairs(METADATA_TAG_MAP) do
+    local value = p[field]
+    if value ~= nil and value ~= "" then
+      value = tostring(value)
+      for _, tag in ipairs(tags) do
+        reaper.GetSetProjectInfo_String(0, "RENDER_METADATA", tag .. "|" .. value, true)
+      end
+      written[field] = value
+    end
+  end
+  local raw = select(2, reaper.GetSetProjectInfo_String(0, "RENDER_METADATA", "", false)) or ""
+  return {written = written, tags_present_after = raw}
+end
+
 function project.project_main_action(p)
   -- Run a REAPER Main action by command_id. Used by high-level pipelines
   -- (e.g. bounce_stems uses action 40892 = render selected tracks to stems).
