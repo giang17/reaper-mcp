@@ -2,6 +2,25 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [0.6.2] - 2026-08-02
+
+### Fixed
+
+- **Rock mix profiles (`classic_rock`, `alt_rock`, `hard_rock`, `pop_rock`,
+  `punk`, `post_rock`) had no role for a single consolidated "Drums" track**
+  — only kick/snare/hats/toms/cymbals as separate tracks. A project using
+  one drums track (e.g. a single multi-articulation drum VSTi) silently got
+  no EQ/comp/reverb from `engine_mix` at all. Added a `drums` role to all
+  six profiles, reusing the existing (previously unwired) `drums_bus()` /
+  `comp_drums_bus()` bus-glue treatment, tuned per subgenre to match each
+  profile's existing kick/snare character.
+- **`lead_guitar` and `clean_guitar` roles didn't match their own natural
+  track names.** Their alias lists only had abbreviated forms ("lead gtr",
+  "clean gtr"), so a track literally named "Lead Guitar" or "Clean Guitar"
+  resolved to no role and got skipped by every genre profile that uses
+  them, not just rock. Added the full-word spellings alongside the
+  abbreviations.
+
 ## [0.6.1] - 2026-07-28
 
 ### Fixed

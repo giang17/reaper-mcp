@@ -584,6 +584,7 @@ ALIASES = {
     "toms":          ["tom"],
     "cymbals":       ["cymbal", "crash", "ride"],
     "drums_bus":     ["drums bus", "drum bus"],
+    "drums":         ["drums", "drum kit", "full kit"],
 
     "sub_bass":      ["sub", "sub bass", "808 sub"],
     "bass":          ["bass"],
@@ -607,8 +608,8 @@ ALIASES = {
     "choir":         ["choir", "vocal ensemble"],
 
     "rhythm_guitar": ["rhythm", "rhy gtr", "gtr"],
-    "lead_guitar":   ["lead gtr", "solo gtr"],
-    "clean_guitar":  ["clean gtr", "acoustic"],
+    "lead_guitar":   ["lead gtr", "lead guitar", "solo gtr", "solo guitar"],
+    "clean_guitar":  ["clean gtr", "clean guitar", "acoustic"],
 
     "ride":          ["ride"],
     "horns_section": ["horns", "horn section", "sax", "trumpet", "trombone", "brass"],
