@@ -2,10 +2,7 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
-## [Unreleased]
-
-Holding these back to batch into one release instead of shipping each
-separately — see individual entries for what's ready so far.
+## [0.6.2] - 2026-08-02
 
 ### Fixed
 
