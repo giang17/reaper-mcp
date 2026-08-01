@@ -234,6 +234,35 @@ def register(mcp: FastMCP):
         return await client.execute("project_set_metadata", **payload)
 
     @mcp.tool()
+    async def project_get_notes_info() -> dict:
+        """Get the Title and Author fields of the Project Settings -> Notes tab.
+
+        These are the two single-line fields at the top of REAPER's Project
+        Settings -> Notes tab — distinct from both the notes free-text area
+        (project_get_notes / GetSetProjectNotes) and the render metadata
+        (project_get_metadata, which feeds file tags and filename templates).
+
+        Unlike render metadata, both fields return their actual stored values
+        (they are not write-only).
+        """
+        return await client.execute("project_get_notes_info")
+
+    @mcp.tool()
+    async def project_set_notes_info(title: str = "", author: str = "") -> dict:
+        """Set the Title and Author fields of the Project Settings -> Notes tab.
+
+        Non-empty fields are written; empty strings are ignored and leave any
+        existing value untouched. At least one field must be non-empty.
+
+        Args:
+            title: Project title (stored via the PROJECT_TITLE descriptor).
+            author: Project author (stored via PROJECT_AUTHOR; this is the same
+                value GetSetProjectAuthor() reads and writes).
+        """
+        payload = _build_metadata_payload({"title": title, "author": author})
+        return await client.execute("project_set_notes_info", **payload)
+
+    @mcp.tool()
     async def project_set_grid(grid_division: float) -> dict:
         """Set grid division (1.0=quarter, 0.5=eighth, 0.25=sixteenth).
 

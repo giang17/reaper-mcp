@@ -1185,6 +1185,51 @@ function project.project_set_metadata(p)
   return {written = written, tags_present_after = raw}
 end
 
+-- ---- Project Settings -> Notes tab: Title / Author fields ----
+-- REAPER's Project Settings -> Notes tab has a free-text area (covered by
+-- project_get_notes / project_set_notes via GetSetProjectNotes) PLUS two
+-- single-line fields: Title and Author. These are NOT the render-metadata
+-- title/artist (RENDER_METADATA) — they live on the project itself and feed
+-- neither file tags nor filename templates.
+--
+-- Reachable, verified empirically on REAPER 7.78/linux:
+--   * GetSetProjectInfo_String descriptors "PROJECT_TITLE" and "PROJECT_AUTHOR".
+--   * "PROJECT_AUTHOR" is the same value GetSetProjectAuthor() reads/writes
+--     (both reflect a change immediately). "PROJECT_TITLE" has no dedicated
+--     function — this descriptor is its only access path.
+--   * Unlike RENDER_METADATA, GET returns the actual stored VALUE (not a
+--     tag-name list), and SET overwrites the field rather than being additive.
+local PROJECT_NOTES_STRING_KEYS = {
+  title  = "PROJECT_TITLE",
+  author = "PROJECT_AUTHOR",
+}
+
+function project.project_get_notes_info(p)
+  local out = {}
+  for field, key in pairs(PROJECT_NOTES_STRING_KEYS) do
+    out[field] = select(2, reaper.GetSetProjectInfo_String(0, key, "", false)) or ""
+  end
+  return out
+end
+
+function project.project_set_notes_info(p)
+  local written = {}
+  for field, key in pairs(PROJECT_NOTES_STRING_KEYS) do
+    local value = p[field]
+    if value ~= nil and value ~= "" then
+      value = tostring(value)
+      reaper.GetSetProjectInfo_String(0, key, value, true)
+      written[field] = value
+    end
+  end
+  -- read back current values (including fields left untouched)
+  local current = {}
+  for field, key in pairs(PROJECT_NOTES_STRING_KEYS) do
+    current[field] = select(2, reaper.GetSetProjectInfo_String(0, key, "", false)) or ""
+  end
+  return {written = written, notes_info = current}
+end
+
 function project.project_main_action(p)
   -- Run a REAPER Main action by command_id. Used by high-level pipelines
   -- (e.g. bounce_stems uses action 40892 = render selected tracks to stems).
