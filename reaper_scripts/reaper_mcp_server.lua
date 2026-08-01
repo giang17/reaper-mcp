@@ -67,7 +67,8 @@ local function setup_ipc()
   if f then f:write(tostring(os.time())); f:close() end
   last_heartbeat = os.time()
 
-  reaper.ShowConsoleMsg("ReaperMCP: Server started. IPC dir: " .. ipc_dir .. "\n")
+  -- Suppress startup dialog: IPC dir is logged in server.lock, not needed as popup
+  -- reaper.ShowConsoleMsg("ReaperMCP: Server started. IPC dir: " .. ipc_dir .. "\n")
 end
 
 -- ============================================================
@@ -697,12 +698,22 @@ local function build_send_info(tr, send_idx)
     local _, dn = reaper.GetTrackName(dest_tr)
     dest_name = dn or ""
   end
+  local midi_flags = reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "I_MIDIFLAGS")
+  local midi_src_chan = -1
+  local midi_dst_chan = -1
+  if midi_flags >= 0 then
+    midi_src_chan = midi_flags & 31
+    midi_dst_chan = (midi_flags >> 5) & 31
+  end
   return {
     index = send_idx,
     volume = vol,
     volume_db = db_from_vol(vol),
     pan = pan,
     mute = reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "B_MUTE") == 1,
+    midi_source_channel = midi_src_chan,
+    midi_dest_channel = midi_dst_chan,
+    midi_enabled = midi_src_chan ~= 31,
     dest_track_index = dest_index,
     dest_track_name = dest_name,
   }
@@ -2247,11 +2258,32 @@ function send.send_create(p)
   local _, src_name = reaper.GetTrackName(src)
   local _, dst_name = reaper.GetTrackName(dst)
   local si = reaper.CreateTrackSend(src, dst)
+  if p.midi_source_channel ~= nil or p.midi_dest_channel ~= nil then
+    local src_ch = p.midi_source_channel or 0
+    local dst_ch = p.midi_dest_channel or 0
+    local flags = (src_ch & 31) | ((dst_ch & 31) << 5)
+    reaper.SetTrackSendInfo_Value(src, 0, si, "I_MIDIFLAGS", flags)
+  end
   local send_info = build_send_info(src, si)
   send_info.source_track_index = math.floor(p.source_track)
   send_info.source_track_name = src_name
   send_info.total_sends = reaper.GetTrackNumSends(src, 0)
   return send_info
+end
+
+function send.send_set_midi_channel(p)
+  local tr, idx, err = get_track(p)
+  if not tr then return nil, err end
+  if p.send_index == nil then return nil, "Missing parameter: send_index" end
+  if p.midi_source_channel == nil then return nil, "Missing parameter: midi_source_channel" end
+  if p.midi_dest_channel == nil then return nil, "Missing parameter: midi_dest_channel" end
+  local src_ch = math.floor(p.midi_source_channel)
+  local dst_ch = math.floor(p.midi_dest_channel)
+  if src_ch < 0 or src_ch > 31 then return nil, "midi_source_channel must be 0-31 (0=all, 1-16, 31=disabled)" end
+  if dst_ch < 0 or dst_ch > 31 then return nil, "midi_dest_channel must be 0-31 (0=all, 1-16, 31=disabled)" end
+  local flags = (src_ch & 31) | ((dst_ch & 31) << 5)
+  reaper.SetTrackSendInfo_Value(tr, 0, math.floor(p.send_index), "I_MIDIFLAGS", flags)
+  return build_send_info(tr, math.floor(p.send_index))
 end
 
 function send.send_remove(p)
