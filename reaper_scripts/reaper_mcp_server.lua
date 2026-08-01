@@ -67,7 +67,8 @@ local function setup_ipc()
   if f then f:write(tostring(os.time())); f:close() end
   last_heartbeat = os.time()
 
-  reaper.ShowConsoleMsg("ReaperMCP: Server started. IPC dir: " .. ipc_dir .. "\n")
+  -- Suppress startup dialog: IPC dir is logged in server.lock, not needed as popup
+  -- reaper.ShowConsoleMsg("ReaperMCP: Server started. IPC dir: " .. ipc_dir .. "\n")
 end
 
 -- ============================================================
