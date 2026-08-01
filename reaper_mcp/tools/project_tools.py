@@ -3,6 +3,42 @@ from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 from reaper_mcp_shared.constants import ALLOWED_EXPORT_FORMATS
 from reaper_mcp_shared.path_safety import safe_path as _safe_path
 
+# Per-field byte cap for project render metadata. Tags are short descriptors;
+# anything approaching 1 KB almost certainly means wrong data was piped in.
+_METADATA_MAX_FIELD_BYTES = 1024
+
+
+def _build_metadata_payload(fields: dict) -> dict:
+    """Filter metadata fields down to non-empty values; raise if none remain.
+
+    Pure logic, extracted from ``project_set_metadata`` so the "empty strings
+    are ignored" / "at least one field required" / "per-field length cap"
+    contract can be unit-tested without REAPER.
+
+    Args:
+        fields: mapping of logical field name (title, author, ...) to value.
+
+    Returns:
+        The subset of ``fields`` whose value is truthy, as strings.
+
+    Raises:
+        ReaperMCPError: if every field is empty, or any field exceeds the cap.
+    """
+    payload = {k: str(v) for k, v in fields.items() if v}
+    if not payload:
+        raise ReaperMCPError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            "at least one metadata field must be non-empty",
+        )
+    for k, v in payload.items():
+        if len(v.encode("utf-8")) > _METADATA_MAX_FIELD_BYTES:
+            raise ReaperMCPError(
+                ErrorCode.VALUE_OUT_OF_RANGE,
+                f"{k} too long ({len(v)} chars) — cap is "
+                f"{_METADATA_MAX_FIELD_BYTES} bytes per field",
+            )
+    return payload
+
 
 def register(mcp: FastMCP):
     from reaper_mcp.main import client
@@ -139,6 +175,92 @@ def register(mcp: FastMCP):
                 f"notes too long ({len(notes)} chars) — cap is 100 KB",
             )
         return await client.execute("project_set_notes", notes=notes)
+
+    @mcp.tool()
+    async def project_get_metadata() -> dict:
+        """Get project render metadata (title, author, album, comment, etc.).
+
+        These are the metadata fields REAPER embeds into rendered files
+        (ID3/BWF/Vorbis/APE tags) and substitutes into render-filename
+        templates ($title, $artist, ...). Reachable in the GUI via the
+        Render dialog's Metadata section.
+
+        Note: REAPER's API exposes WHICH fields are set (the tag list), but
+        not their VALUES — values are write-only via GetSetProjectInfo_String
+        (verified on REAPER 7.78). The returned `fields_set` maps each known
+        logical field to true when any of its tags is present; `tags_present`
+        gives the raw tag list (e.g. ["ID3:TIT2", "VORBIS:TITLE"]).
+        """
+        return await client.execute("project_get_metadata")
+
+    @mcp.tool()
+    async def project_set_metadata(
+        title: str = "",
+        author: str = "",
+        album: str = "",
+        comment: str = "",
+        genre: str = "",
+        year: str = "",
+        track_number: str = "",
+        composer: str = "",
+        isrc: str = "",
+        copyright: str = "",
+    ) -> dict:
+        """Set project render metadata fields. Non-empty fields are written.
+
+        Each field is written to every tag format REAPER can embed on render
+        (ID3 for mp3/wav-bwf, VORBIS for flac/ogg, APE for mpc/wv) so the
+        value survives regardless of the render format chosen later. Empty
+        strings are ignored and leave any existing value for that field
+        untouched. Setting a field again overwrites its previous value.
+
+        Args:
+            title: Track / project title.
+            author: Artist / author.
+            album: Album name.
+            comment: Free-form comment.
+            genre: Genre.
+            year: Year / date.
+            track_number: Track number.
+            composer: Composer.
+            isrc: ISRC code.
+            copyright: Copyright string.
+        """
+        payload = _build_metadata_payload({
+            "title": title, "author": author, "album": album, "comment": comment,
+            "genre": genre, "year": year, "track_number": track_number,
+            "composer": composer, "isrc": isrc, "copyright": copyright,
+        })
+        return await client.execute("project_set_metadata", **payload)
+
+    @mcp.tool()
+    async def project_get_notes_info() -> dict:
+        """Get the Title and Author fields of the Project Settings -> Notes tab.
+
+        These are the two single-line fields at the top of REAPER's Project
+        Settings -> Notes tab — distinct from both the notes free-text area
+        (project_get_notes / GetSetProjectNotes) and the render metadata
+        (project_get_metadata, which feeds file tags and filename templates).
+
+        Unlike render metadata, both fields return their actual stored values
+        (they are not write-only).
+        """
+        return await client.execute("project_get_notes_info")
+
+    @mcp.tool()
+    async def project_set_notes_info(title: str = "", author: str = "") -> dict:
+        """Set the Title and Author fields of the Project Settings -> Notes tab.
+
+        Non-empty fields are written; empty strings are ignored and leave any
+        existing value untouched. At least one field must be non-empty.
+
+        Args:
+            title: Project title (stored via the PROJECT_TITLE descriptor).
+            author: Project author (stored via PROJECT_AUTHOR; this is the same
+                value GetSetProjectAuthor() reads and writes).
+        """
+        payload = _build_metadata_payload({"title": title, "author": author})
+        return await client.execute("project_set_notes_info", **payload)
 
     @mcp.tool()
     async def project_set_grid(grid_division: float) -> dict:
