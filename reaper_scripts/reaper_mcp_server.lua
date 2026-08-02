@@ -615,6 +615,44 @@ local function build_fx_info(tr, fx_idx)
   }
 end
 
+-- Deterministic FX-parameter application order. Some plugins crash
+-- reliably (confirmed: FabFilter Pro-Q 3, STATUS_ACCESS_VIOLATION, same
+-- crash offset every time) when a band's Frequency/Gain/Q get written
+-- before its Used/Enabled flags — plain `pairs()` has no guaranteed
+-- order for string-keyed tables, so which write happens first was
+-- effectively random per call. Sorting numeric indices ascending puts
+-- Used/Enabled (band base + 0/+1) before the rest of each band, every
+-- time, matching what a plugin that initializes bands lazily needs.
+local function sorted_index_pairs(t)
+  local keys = {}
+  for k in pairs(t) do keys[#keys+1] = k end
+  table.sort(keys, function(a, b) return (tonumber(a) or 0) < (tonumber(b) or 0) end)
+  local i = 0
+  return function()
+    i = i + 1
+    local k = keys[i]
+    if k == nil then return nil end
+    return k, t[k]
+  end
+end
+
+-- Same determinism goal for named (fuzzy-matched) params. Not proven
+-- required the way index ordering was — no equivalent "enable flag" for
+-- named params — but a fixed order is strictly safer than a random one
+-- and costs nothing.
+local function sorted_name_pairs(t)
+  local keys = {}
+  for k in pairs(t) do keys[#keys+1] = k end
+  table.sort(keys)
+  local i = 0
+  return function()
+    i = i + 1
+    local k = keys[i]
+    if k == nil then return nil end
+    return k, t[k]
+  end
+end
+
 local function build_fx_chain(tr)
   local count = reaper.TrackFX_GetCount(tr)
   local chain = {}
@@ -3524,7 +3562,7 @@ function compose.setup_fx_chain(p)
         -- Set params by name (fuzzy match)
         if fx_entry.params then
           local num_params = reaper.TrackFX_GetNumParams(tr, fx_idx)
-          for param_name, param_val in pairs(fx_entry.params) do
+          for param_name, param_val in sorted_name_pairs(fx_entry.params) do
             local found = -1
             local pname_lower = tostring(param_name):lower()
             for pi = 0, num_params - 1 do
@@ -3544,7 +3582,7 @@ function compose.setup_fx_chain(p)
 
         -- Set params by index
         if fx_entry.params_by_index then
-          for pi_str, param_val in pairs(fx_entry.params_by_index) do
+          for pi_str, param_val in sorted_index_pairs(fx_entry.params_by_index) do
             local pi = math.floor(tonumber(pi_str) or -1)
             if pi >= 0 then
               reaper.TrackFX_SetParam(tr, fx_idx, pi, param_val)
@@ -3642,7 +3680,7 @@ function compose.setup_effect_bus(p)
         -- Set params by name
         if fx_entry.params then
           local num_params = reaper.TrackFX_GetNumParams(bus_tr, fx_idx)
-          for param_name, param_val in pairs(fx_entry.params) do
+          for param_name, param_val in sorted_name_pairs(fx_entry.params) do
             local pname_lower = tostring(param_name):lower()
             for pi = 0, num_params - 1 do
               local _, pn = reaper.TrackFX_GetParamName(bus_tr, fx_idx, pi, "")
@@ -3656,7 +3694,7 @@ function compose.setup_effect_bus(p)
 
         -- Set params by index
         if fx_entry.params_by_index then
-          for pi_str, param_val in pairs(fx_entry.params_by_index) do
+          for pi_str, param_val in sorted_index_pairs(fx_entry.params_by_index) do
             local pi = math.floor(tonumber(pi_str) or -1)
             if pi >= 0 then
               reaper.TrackFX_SetParam(bus_tr, fx_idx, pi, param_val)
@@ -3790,7 +3828,7 @@ function compose.setup_master_chain(p)
           -- Set params by name (fuzzy)
           if fx_entry.params then
             local num_params = reaper.TrackFX_GetNumParams(master, fx_idx)
-            for param_name, param_val in pairs(fx_entry.params) do
+            for param_name, param_val in sorted_name_pairs(fx_entry.params) do
               local pname_lower = tostring(param_name):lower()
               for pi = 0, num_params - 1 do
                 local _, pn = reaper.TrackFX_GetParamName(master, fx_idx, pi, "")
@@ -3804,7 +3842,7 @@ function compose.setup_master_chain(p)
 
           -- Set params by index
           if fx_entry.params_by_index then
-            for pi_str, param_val in pairs(fx_entry.params_by_index) do
+            for pi_str, param_val in sorted_index_pairs(fx_entry.params_by_index) do
               local pi = math.floor(tonumber(pi_str) or -1)
               if pi >= 0 then
                 reaper.TrackFX_SetParam(master, fx_idx, pi, param_val)
