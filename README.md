@@ -429,11 +429,11 @@ Turning this into a tool every REAPER user reaches for takes more than one perso
 
 ## Support
 
-If ReaperMCP has helped with your music production, consider buying me a coffee:
+If ReaperMCP has helped with your music production, consider sponsoring:
 
 <p align="center">
-  <a href="https://buymeacoffee.com/xdarkzx">
-    <img src="https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee" />
+  <a href="https://github.com/sponsors/xDarkzx">
+    <img src="https://img.shields.io/badge/Sponsor-30363D?style=for-the-badge&logo=githubsponsors&logoColor=EA4AAA" alt="GitHub Sponsors" />
   </a>
 </p>
 
