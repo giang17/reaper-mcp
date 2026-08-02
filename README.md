@@ -38,7 +38,7 @@ ReaperMCP connects any MCP-compatible AI assistant to [REAPER](https://www.reape
 
 **No cloud. Nothing leaves your machine.** ReaperMCP runs entirely locally through a file-based Lua IPC bridge inside REAPER — your project, audio, and MIDI stay on your computer. Bring whatever AI client you already use (Claude Desktop, Claude Code, Cursor, any MCP client) — ReaperMCP handles REAPER.
 
-**If this is useful to you, a star helps other people find it** — that's the whole marketing budget for this project.
+**If this is useful to you, a star helps other people find it** — that's the whole marketing budget for this project. Want to help keep it maintained? Click the **Sponsor** badge up top.
 
 ### Demo
 
