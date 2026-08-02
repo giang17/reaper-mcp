@@ -48,7 +48,7 @@ Both sides resolve the directory through Python's `tempfile.gettempdir()` and Lu
 2. The client checks the lock file heartbeat; if stale, it raises `CONNECTION_LOST` before issuing the command.
 3. Old command/response files are cleaned up.
 4. The command is written to `command.tmp`, then atomically renamed to `command.json`.
-5. The client polls for `response.json` every 50 ms, up to the command timeout (30 s normally, 600 s for bulk MIDI / FX writes).
+5. The client polls for `response.json` every 50 ms, up to the command timeout (30 s normally, 600 s for bulk MIDI / FX writes) — re-checking heartbeat staleness roughly every 2 s during the wait, so a REAPER crash mid-command surfaces well before the full timeout rather than only being caught by step 2's pre-flight check.
 6. The Lua script sees the new `command.json`, dispatches to the named handler, and writes the result.
 7. Python reads the response, deletes it, and returns.
 
