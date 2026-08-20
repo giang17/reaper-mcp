@@ -143,16 +143,27 @@ class ReaperClient:
                 "In REAPER: Actions > Show action list > Load ReaScript > reaper_mcp_server.lua > Run",
             )
         # Check heartbeat — if lock file is stale, server likely crashed
+        if self._heartbeat_stale():
+            raise ReaperMCPError(
+                ErrorCode.CONNECTION_LOST,
+                "REAPER MCP server appears stale (no heartbeat). "
+                "Re-run the Lua script in REAPER.",
+            )
+
+    def _heartbeat_stale(self) -> bool:
+        """True if the Lua side's heartbeat hasn't updated recently.
+
+        The Lua bridge refreshes server.lock's mtime every HEARTBEAT_INTERVAL
+        (10s) from its main defer loop. A crash doesn't delete that file — it
+        just stops updating it — so staleness, not existence, is the actual
+        crash signal. Existence-only checks (the bug this replaced) never
+        fire on a real crash, since the stale file just sits there looking
+        "present" for as long as nothing else cleans it up.
+        """
         try:
-            mtime = os.path.getmtime(Connection.LOCK_FILE)
-            if time.time() - mtime > _HEARTBEAT_STALE_SECONDS:
-                raise ReaperMCPError(
-                    ErrorCode.CONNECTION_LOST,
-                    "REAPER MCP server appears stale (no heartbeat). "
-                    "Re-run the Lua script in REAPER.",
-                )
+            return time.time() - os.path.getmtime(Connection.LOCK_FILE) > _HEARTBEAT_STALE_SECONDS
         except OSError:
-            pass
+            return False  # can't tell — don't report a crash we haven't confirmed
 
     def _cleanup_files(self):
         for f in (Connection.COMMAND_FILE, Connection.RESPONSE_FILE,
@@ -257,13 +268,16 @@ class ReaperClient:
                         )
                     time.sleep(Timeouts.POLL_INTERVAL)
                     continue
-            # Check for REAPER crash every ~2 seconds during polling
+            # Check for REAPER crash every ~2 seconds during polling. Staleness,
+            # not existence — see _heartbeat_stale(). This is what lets a crash
+            # mid-command surface in ~heartbeat-stale-seconds instead of the
+            # full command timeout (up to 600s for execute_long).
             poll_count += 1
-            if poll_count % 40 == 0 and not os.path.exists(Connection.LOCK_FILE):
+            if poll_count % 40 == 0 and self._heartbeat_stale():
                 raise ReaperMCPError(ErrorCode.CONNECTION_LOST, "REAPER MCP server stopped during command")
             time.sleep(Timeouts.POLL_INTERVAL)
 
-        if not os.path.exists(Connection.LOCK_FILE):
+        if self._heartbeat_stale():
             raise ReaperMCPError(ErrorCode.CONNECTION_LOST, "REAPER MCP server stopped")
         raise ReaperMCPError(ErrorCode.COMMAND_TIMEOUT, f"Command '{command}' timed out after {timeout}s")
 

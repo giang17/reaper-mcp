@@ -2,6 +2,43 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [Unreleased]
+
+### CI and Repository Updates
+
+None of this changes the package itself.
+
+- Added `ruff` to CI, scoped to the `F` (real bugs) and `S` (security-relevant patterns) rule categories, not style or formatting. Cleaned up everything it found: 19 dead imports, 1 dead variable, restructured two `__init__.py` files' re-exports to the explicit `X as X` form, documented 4 existing intentional non-fatal exception handlers and 3 seeded-random-for-reproducibility cases that were false positives, and switched 4 temp-file-path spots to the standard `tempfile.gettempdir()`.
+- Branch protection on `main`: merging requires CI to pass and at least one review.
+- Dependabot enabled for Python dependencies and GitHub Actions versions, with automatic security-update PRs and vulnerability alerts.
+- Added `SECURITY.md` and enabled GitHub's private vulnerability reporting.
+- GitHub Actions bumped to their latest majors: `checkout` and `setup-python` to v7, `upload-artifact` to v7, `download-artifact` to v8.
+
+## [0.6.3] - 2026-08-02
+
+### Fixed
+
+- **REAPER crashing (STATUS_ACCESS_VIOLATION) during `engine_mix`/
+  `engine_master`, confirmed via minidump analysis to be FabFilter
+  Pro-Q 3/Pro-C 2 crashing on parameter writes.** `setup_fx_chain`
+  applied FX params via plain Lua `pairs()`, which has no guaranteed
+  order for string-keyed tables — a Pro-Q 3 band's Frequency/Gain/Q
+  could get written before its Used/Enabled flags, hitting internal
+  plugin state that isn't initialized yet. Two independent crash dumps
+  hit the identical code offset inside Pro-Q 3, the signature of a
+  deterministic trigger rather than random overload. Params are now
+  applied in a fixed order (numeric ascending for indexed params, so
+  Used/Enabled always come first; alphabetical for named params) at
+  all three call sites — track, bus, and master FX chains.
+- **A crash mid-command could leave the client stalled for the full
+  timeout (up to 600s on `execute_long`) instead of surfacing the
+  failure.** The mid-poll crash check tested whether the heartbeat
+  lock file still *existed*, but a crash doesn't delete that file —
+  it just stops updating it, so the check never actually fired. Now
+  checks heartbeat *staleness* (same logic already used pre-flight),
+  so a crash surfaces in roughly the heartbeat-stale window instead
+  of the full command timeout.
+
 ## [0.6.2] - 2026-08-02
 
 ### Fixed

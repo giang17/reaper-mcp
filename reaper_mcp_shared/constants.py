@@ -67,7 +67,6 @@ ALLOWED_EXPORT_FORMATS = {"wav", "mp3", "ogg", "flac", "aiff"}
 # Hard ceilings for single-call operations. The Lua bridge streams JSON into a
 # string buffer and parses it; very large payloads block REAPER's main thread.
 # Empirically these values keep any one call under ~2 seconds on typical HW.
-MAX_TRACKS = 500                 # Absolute ceiling on track index validation
 MAX_LABEL_LENGTH = 1000          # Track/marker/item name max length
 
 MAX_COMPOSE_TRACKS = 50          # Per `compose_arrangement` / `configure_tracks` call
@@ -80,3 +79,11 @@ MAX_TOTAL_NOTES_PER_CALL = 50000 # Sum of notes across all tracks in one call
 # write-side limits, but tune independently — they bound different things.
 MAX_NOTES_READ_RESULTS = 10000       # `midi_get_notes` max_results ceiling
 MAX_ENVELOPE_POINTS_PER_CALL = 50000 # `envelope_add_points` points-per-call ceiling
+
+# analyze_silence/analyze_peaks candidate lists were unbounded — a busy
+# percussive mix could return thousands of peak candidates (same shape of
+# problem as the fx_set_preset full-param-dump issue, different tool).
+# Whole-file cap; analyze_region_qc uses a smaller per-region cap since its
+# total is multiplied across up to 200 regions in one call.
+MAX_ANALYSIS_CANDIDATES = 300
+MAX_ANALYSIS_CANDIDATES_PER_REGION = 50
