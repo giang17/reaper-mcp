@@ -54,6 +54,11 @@ class Connection:
     # itself. Nothing ever reads this file to kill another process; each
     # server only ever acts on what it reads about itself.
     GENERATION_DIR = os.path.join(IPC_DIR, "generations")
+    # One JSON file per completed command (pass or fail), for after-the-fact
+    # debugging — command.json/response.json get deleted immediately after
+    # each round-trip, so without this there's no record of what was sent
+    # once it's done. Swept for entries older than HISTORY_RETENTION_DAYS.
+    HISTORY_DIR = os.path.join(IPC_DIR, "history")
 
 
 class Timeouts:
@@ -62,7 +67,20 @@ class Timeouts:
     LONG_COMMAND = 600.0       # For batch MIDI/FX writes (up to ~500KB payloads)
 
 
+HISTORY_RETENTION_DAYS = 30
+HISTORY_PARAM_PREVIEW_CHARS = 2000  # cap stored params — a huge batch call
+                                     # shouldn't turn the history dir into
+                                     # its own version of the data-dump bug
+
+
 ALLOWED_EXPORT_FORMATS = {"wav", "mp3", "ogg", "flac", "aiff"}
+
+# Cache of scanned VST/AU parameter behavior (units, curve shape), keyed by
+# plugin name. Deliberately NOT under Connection.IPC_DIR (private, 0700,
+# per-machine) — these files are meant to be committed and shared, so a plain
+# world-readable directory under the package is correct here.
+PLUGIN_MAP_DIR = os.path.join(os.path.dirname(__file__), "plugin_maps")
+MAX_SCAN_PARAMS = 200  # cap per fx_scan_params call — mirrors MAX_ANALYSIS_CANDIDATES's purpose
 
 # Hard ceilings for single-call operations. The Lua bridge streams JSON into a
 # string buffer and parses it; very large payloads block REAPER's main thread.

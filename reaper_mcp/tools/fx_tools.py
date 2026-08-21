@@ -1,5 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
+from reaper_mcp_shared.constants import MAX_SCAN_PARAMS
+from reaper_mcp_shared.plugin_cache import infer_curve, load_cached_map, save_cached_map
 
 
 def register(mcp: FastMCP):
@@ -118,6 +120,74 @@ def register(mcp: FastMCP):
             track_index=track_index, fx_index=fx_index,
             param_name=param_name, value=value,
         )
+
+    @mcp.tool()
+    async def fx_scan_params(track_index: int, fx_index: int) -> dict:
+        """On-demand fallback: sweep a plugin's parameters to learn their real
+        range/units/curve shape, when you're genuinely unsure and about to
+        guess. NOT a general "understand this plugin" tool, and not something
+        to call routinely or proactively on every plugin you touch.
+
+        Scope: this answers "what range/units does this specific parameter
+        actually use" (calibration) — nothing more. It does not explain what
+        a parameter *means* or what a plugin is *for*; reasoning about a
+        plugin's purpose and a vaguely-named control ("Character," "Drive")
+        is something you're already equipped to do from general knowledge,
+        the same way you already handle FabFilter without this tool. Reach
+        for fx_scan_params only when that reasoning genuinely isn't enough —
+        e.g. an obscure/freeware plugin with no clear labeling, or a
+        specific parameter whose behavior turned out to be surprising (see
+        docs/superpowers/specs/2026-08-06-vst-param-autoscan-design.md for
+        the reasoning behind this scope).
+
+        Caches the result by plugin name, so repeat scans of the same plugin
+        (even in a different project) return instantly from the on-disk
+        cache instead of touching REAPER again. Briefly writes and restores
+        every parameter's value during the sweep, and can take longer on
+        plugins with many parameters — another reason this is deliberately
+        separate from fx_get_params rather than folded into routine reads.
+
+        Args:
+            track_index: 0-based track index.
+            fx_index: 0-based FX chain index.
+        """
+        if track_index < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
+        if fx_index < 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "fx_index must be >= 0")
+
+        chain = await client.execute("fx_get_chain", track_index=track_index)
+        fx_list = chain.get("data", {}).get("fx_chain", [])
+        if not 0 <= fx_index < len(fx_list):
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "fx_index out of range for this track")
+        plugin_name = fx_list[fx_index]["name"]
+
+        cached = load_cached_map(plugin_name)
+        if cached is not None:
+            return {**cached, "from_cache": True}
+
+        result = await client.execute_long(
+            "fx_scan_params", track_index=track_index, fx_index=fx_index, max_params=MAX_SCAN_PARAMS,
+        )
+        scan_data = result.get("data", {})
+        params = []
+        for entry in scan_data.get("params", []):
+            curve, unit = infer_curve(entry["samples"])
+            params.append({
+                "index": entry["index"],
+                "name": entry["name"],
+                "samples": entry["samples"],
+                "inferred_curve": curve,
+                "inferred_unit": unit,
+            })
+        truncated = bool(scan_data.get("truncated", False))
+        save_cached_map(plugin_name, params, truncated)
+        return {
+            "plugin_name": plugin_name,
+            "truncated": truncated,
+            "params": params,
+            "from_cache": False,
+        }
 
     @mcp.tool()
     async def fx_enable(track_index: int, fx_index: int) -> dict:
