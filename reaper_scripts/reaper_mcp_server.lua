@@ -324,8 +324,10 @@ end
 -- Response helpers (with error checking on file I/O)
 -- ============================================================
 
-local function send_success(data)
-  local resp = json_encode(data and {success = true, data = data} or {success = true})
+local function send_success(data, id)
+  local resp_table = data and {success = true, data = data} or {success = true}
+  if id then resp_table.id = id end
+  local resp = json_encode(resp_table)
   local f, err = io.open(response_tmp, "w")
   if not f then
     reaper.ShowConsoleMsg("ReaperMCP: Failed to write response: " .. tostring(err) .. "\n")
@@ -345,8 +347,10 @@ local function send_success(data)
   end
 end
 
-local function send_error(msg)
-  local resp = json_encode({success = false, error = msg})
+local function send_error(msg, id)
+  local resp_table = {success = false, error = msg}
+  if id then resp_table.id = id end
+  local resp = json_encode(resp_table)
   local f, err = io.open(response_tmp, "w")
   if not f then
     reaper.ShowConsoleMsg("ReaperMCP: Failed to write error response: " .. tostring(err) .. "\n")
@@ -521,6 +525,16 @@ local function track_sample_filenames(tr)
   return names
 end
 
+-- REAPER I_NCHAN stores the number of track channels (2, 4, 6, … 64).
+-- A value of 0 means the track uses the project default (usually 2).
+local function track_channel_count(tr)
+  local nchan = reaper.GetMediaTrackInfo_Value(tr, "I_NCHAN")
+  -- 0 is REAPER's sentinel for "use project default"; report it as 2 so
+  -- callers always receive a concrete, usable number.
+  if nchan == nil or nchan <= 0 then return 2 end
+  return math.floor(nchan)
+end
+
 local function build_track_info(tr, idx)
   local _, name = reaper.GetTrackName(tr)
   local vol = reaper.GetMediaTrackInfo_Value(tr, "D_VOL")
@@ -546,6 +560,10 @@ local function build_track_info(tr, idx)
     sample_filenames = track_sample_filenames(tr),
     send_count = reaper.GetTrackNumSends(tr, 0),
     receive_count = reaper.GetTrackNumSends(tr, -1),
+    -- Number of audio channels active on this track (I_NCHAN). Relevant
+    -- for multi-channel / sidechain routing; 0 from REAPER is normalised
+    -- to 2 (project default) so callers always get a concrete value.
+    channel_count = track_channel_count(tr),
     folder_depth = reaper.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH"),
     color_r = r, color_g = g, color_b = b,
     input_index = reaper.GetMediaTrackInfo_Value(tr, "I_RECINPUT"),
@@ -725,6 +743,27 @@ local function build_fx_params(tr, fx_idx)
   }
 end
 
+-- Human-readable names for REAPER's I_SENDMODE integer values.
+-- 0=post-fader (default), 1=pre-fader post-FX, 2=pre-fader pre-FX, 3=post-FX only.
+local SEND_MODE_NAMES = {
+  [0] = "post_fader",
+  [1] = "pre_fader_post_fx",
+  [2] = "pre_fader_pre_fx",
+  [3] = "post_fx_only",
+}
+
+-- Decode a raw REAPER channel integer (I_SRCCHAN / I_DSTCHAN) into the
+-- 1-based stereo pair it represents.  REAPER stores the *zero-based* index
+-- of the first channel in the pair: 0 = ch1/2, 2 = ch3/4, 4 = ch5/6, …
+-- Returns the human-readable pair string e.g. "1/2", "3/4" and the
+-- raw zero-based start index for lossless round-trips.
+local function decode_channel_pair(raw)
+  local start0 = math.floor(raw or 0)  -- zero-based first channel
+  local ch1 = start0 + 1               -- 1-based first channel
+  local ch2 = start0 + 2               -- 1-based second channel (stereo pair)
+  return ch1 .. "/" .. ch2, start0
+end
+
 local function build_send_info(tr, send_idx)
   local vol = reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "D_VOL")
   local pan = reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "D_PAN")
@@ -743,6 +782,12 @@ local function build_send_info(tr, send_idx)
     midi_src_chan = midi_flags & 31
     midi_dst_chan = (midi_flags >> 5) & 31
   end
+  -- Routing channel fields (Issue #23)
+  local raw_sendmode = math.floor(reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "I_SENDMODE") or 0)
+  local raw_srcchan  = math.floor(reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "I_SRCCHAN")  or 0)
+  local raw_dstchan  = math.floor(reaper.GetTrackSendInfo_Value(tr, 0, send_idx, "I_DSTCHAN")  or 0)
+  local src_pair, src_raw = decode_channel_pair(raw_srcchan)
+  local dst_pair, dst_raw = decode_channel_pair(raw_dstchan)
   return {
     index = send_idx,
     volume = vol,
@@ -754,6 +799,16 @@ local function build_send_info(tr, send_idx)
     midi_enabled = midi_src_chan ~= 31,
     dest_track_index = dest_index,
     dest_track_name = dest_name,
+    -- Routing inspection fields (Issue #23)
+    send_mode = {
+      raw = raw_sendmode,
+      name = SEND_MODE_NAMES[raw_sendmode] or "unknown",
+    },
+    audio = {
+      source_channel_raw = src_raw,
+      destination_channel_raw = dst_raw,
+      interpreted = src_pair .. " -> " .. dst_pair,
+    },
   }
 end
 
@@ -1121,10 +1176,80 @@ function project.project_backup(p)
 end
 
 function project.project_export_audio(p)
-  -- NOTE: This opens REAPER's render dialog. The path/format params from MCP
-  -- are not directly usable — REAPER uses its own render settings.
-  reaper.Main_OnCommand(41824, 0)
-  return {rendered = true, note = "Used REAPER default render settings. Configure render settings in REAPER for specific format/path."}
+  if not p.render_dir then return nil, "Missing parameter: render_dir" end
+  if not p.render_pattern then return nil, "Missing parameter: render_pattern" end
+  if not p.format_code then return nil, "Missing parameter: format_code" end
+  local source = p.source or "master"
+
+  -- Confirmed by real testing (not just docs): REAPER's $track wildcard
+  -- substitutes the raw track name into the filename with no escaping, so
+  -- a track named e.g. "L4 - Intense / Boss" silently splits into a
+  -- subfolder "L4 - Intense " containing "Boss.wav" instead of one file -
+  -- same as it would from REAPER's own render dialog. Fail clearly up
+  -- front for stems instead of letting that surprise the caller.
+  if source == "stems" and p.render_pattern:find("%$track") then
+    local n_sel = reaper.CountSelectedTracks(0)
+    for i = 0, n_sel - 1 do
+      local tr = reaper.GetSelectedTrack(0, i)
+      local _, tname = reaper.GetTrackName(tr)
+      if tname:find("[/\\]") then
+        return nil, "Track name \"" .. tname .. "\" contains / or \\, which "
+          .. "REAPER's $track wildcard turns into a subfolder instead of "
+          .. "part of the filename. Rename the track (or pass an explicit "
+          .. "pattern that doesn't use $track) before rendering stems."
+      end
+    end
+  end
+
+  reaper.GetSetProjectInfo_String(0, "RENDER_FILE", p.render_dir, true)
+  reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", p.render_pattern, true)
+  local format_ok = reaper.GetSetProjectInfo_String(0, "RENDER_FORMAT", p.format_code, true)
+
+  -- RENDER_SETTINGS is a bitmask; only touch the source-selection bits,
+  -- preserve everything else (2nd-pass render, normalize, etc.) via
+  -- read-modify-write. Values confirmed against cfillion's published
+  -- render-preset script (0x0000 = master mix, 0x0003 = stems of selected
+  -- tracks) after an initial wrong guess (0x0002) rendered a single master
+  -- file instead of stems — verified for real by inspecting rendered files
+  -- on disk, not just by trusting the read-back matched what was sent.
+  -- NOTE: RENDER_SETTINGS is NOT a string-type project info key
+  -- (GetSetProjectInfo_String round-tripped it as "") — it's numeric, so
+  -- this uses GetSetProjectInfo instead.
+  local settings = reaper.GetSetProjectInfo(0, "RENDER_SETTINGS", 0, false)
+  local SOURCE_MASK = 0x0003
+  settings = settings & ~SOURCE_MASK
+  if source == "stems" then
+    settings = settings | 0x0003
+  end
+  reaper.GetSetProjectInfo(0, "RENDER_SETTINGS", settings, true)
+
+  -- Read every value straight back from REAPER after writing it, so the
+  -- caller can see exactly what's actually stored, not just what was sent.
+  local _, readback_file = reaper.GetSetProjectInfo_String(0, "RENDER_FILE", "", false)
+  local _, readback_pattern = reaper.GetSetProjectInfo_String(0, "RENDER_PATTERN", "", false)
+  local _, readback_format = reaper.GetSetProjectInfo_String(0, "RENDER_FORMAT", "", false)
+  local readback_settings = reaper.GetSetProjectInfo(0, "RENDER_SETTINGS", 0, false)
+  local n_selected = reaper.CountSelectedTracks(0)
+
+  reaper.Main_OnCommand(42230, 0)  -- render using current settings, no dialog
+  return {
+    rendered = true,
+    source = source,
+    format_ok = format_ok,
+    selected_track_count = n_selected,
+    sent = {
+      render_dir = p.render_dir,
+      render_pattern = p.render_pattern,
+      format_code = p.format_code,
+      render_settings = settings,
+    },
+    readback = {
+      render_file = readback_file,
+      render_pattern = readback_pattern,
+      render_format = readback_format,
+      render_settings = readback_settings,
+    },
+  }
 end
 
 function project.project_undo(p)
@@ -1378,22 +1503,47 @@ function fx.fx_scan_params(p)
   end
 
   local params = {}
-  local points = {0.0, 0.5, 1.0}
+  -- Fixed 3-point sampling (0/0.5/1.0) is fine for continuous params but
+  -- silently useless for stepped/categorical ones (e.g. Pro-Q 3's "Shape"
+  -- dropdown has ~8 real values - Bell/Low Shelf/Low Cut/High Shelf/
+  -- High Cut/Notch/Band Pass/Flat Tilt - and 3 samples only ever reveals
+  -- 3 of them, forcing a caller into manual binary-search guessing for
+  -- the rest, a real, reported pain point). REAPER's own
+  -- TrackFX_GetParameterStepCount tells us exactly how many discrete
+  -- values a stepped param has - step_count is the count of increments
+  -- BETWEEN values (REAPER's own documented convention), so a param
+  -- with step_count=7 has 8 real values at s/7 for s=0..7. Sampling
+  -- every one of them gives an exact, complete map instead of a guess.
+  -- Continuous params (step_count <= 0) get a denser 9-point sweep
+  -- instead of 3, for better interpolation precision on things like
+  -- Frequency without needing a hand-built lookup table.
+  local DENSE_CONTINUOUS_POINTS = {0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0}
+  local MAX_STEP_SAMPLES = 32 -- sanity ceiling, well above any real dropdown's size
   for i = 0, limit - 1 do
     local _, pname = reaper.TrackFX_GetParamName(tr, fi, i, "")
     local orig_val = reaper.TrackFX_GetParam(tr, fi, i)
     local is_midi_cc = pname:find("^MIDI CC")
     local skip = (pname == "-" and orig_val == 0) or is_midi_cc
     if not skip then
+      local points
+      local step_count = reaper.TrackFX_GetParameterStepCount(tr, fi, i)
+      if step_count and step_count > 0 and step_count <= MAX_STEP_SAMPLES then
+        points = {}
+        for s = 0, step_count do
+          points[#points + 1] = s / step_count
+        end
+      else
+        points = DENSE_CONTINUOUS_POINTS
+      end
       local samples = {}
       for _, pt in ipairs(points) do
         reaper.TrackFX_SetParam(tr, fi, i, pt)
         local val = reaper.TrackFX_GetParam(tr, fi, i)
         local _, fmt = reaper.TrackFX_FormatParamValue(tr, fi, i, val, "")
-        samples[#samples + 1] = fmt
+        samples[#samples + 1] = {normalized = pt, formatted = fmt}
       end
       reaper.TrackFX_SetParam(tr, fi, i, orig_val)
-      params[#params + 1] = {index = i, name = pname, samples = samples}
+      params[#params + 1] = {index = i, name = pname, samples = samples, step_count = step_count}
     end
   end
 
@@ -1575,6 +1725,79 @@ function fx.fx_list_installed(p)
     end
   end
   return {count = #plugins, plugins = plugins}
+end
+
+function fx.fx_get_pin_mappings(p)
+  -- Read-only inspection of an FX plugin's input and output pin mappings
+  -- via TrackFX_GetPinMappings (Issue #23).  Each pin entry includes:
+  --   pin              — 0-based pin index
+  --   track_channels   — list of 1-based track channel numbers connected to this pin
+  --   low32_raw        — raw low-32-bit bitmask from REAPER (lossless)
+  --   high32_raw       — raw high-32-bit bitmask (channels 33-64)
+  local tr, idx, err = get_track(p)
+  if not tr then return nil, err end
+  if p.fx_index == nil then return nil, "Missing parameter: fx_index" end
+  local fi = math.floor(p.fx_index)
+  if fi < 0 then return nil, "fx_index must be >= 0" end
+  local fx_count = reaper.TrackFX_GetCount(tr)
+  if fi >= fx_count then
+    return nil, "fx_index " .. fi .. " out of range (track has " .. fx_count .. " FX)"
+  end
+  if not reaper.TrackFX_GetPinMappings then
+    return nil, "REAPER version too old: TrackFX_GetPinMappings unavailable. Update REAPER to >= 6.0."
+  end
+
+  -- REAPER reports a fixed set of pins per FX; we iterate until the bitmask
+  -- is zero for both in and out to find the real boundary, capping at 64 pins
+  -- as a safety limit (no known plugin has more than ~32 usable pins).
+  local MAX_PINS = 64
+
+  local function read_pins(is_output)
+    -- is_output: 1 = output pins, 0 = input pins
+    local pins = {}
+    for pin = 0, MAX_PINS - 1 do
+      local low, high = reaper.TrackFX_GetPinMappings(tr, fi, is_output, pin)
+      if low == nil then break end  -- API not available or pin out of range
+      -- Both zero means no channels are wired to this pin; stop scanning
+      -- only after we've checked pin 0 (a plugin may have nothing on pin 0
+      -- but something on pin 2, though that's unusual).
+      if (low == 0 and high == 0) and pin > 0 then
+        -- Peek one more: if that's also empty, we're past the real pins.
+        local nlow, nhigh = reaper.TrackFX_GetPinMappings(tr, fi, is_output, pin + 1)
+        if nlow == nil or (nlow == 0 and nhigh == 0) then break end
+      end
+      -- Decode bitmask → list of 1-based track channel numbers.
+      -- low covers channels 1-32 (bit 0 = ch1 … bit 31 = ch32).
+      -- high covers channels 33-64.
+      local channels = {}
+      for bit = 0, 31 do
+        if low & (1 << bit) ~= 0 then
+          channels[#channels+1] = bit + 1
+        end
+      end
+      for bit = 0, 31 do
+        if high & (1 << bit) ~= 0 then
+          channels[#channels+1] = bit + 33
+        end
+      end
+      pins[#pins+1] = {
+        pin         = pin,
+        track_channels = channels,
+        low32_raw   = math.floor(low),
+        high32_raw  = math.floor(high),
+      }
+    end
+    return pins
+  end
+
+  local _, fx_name = reaper.TrackFX_GetFXName(tr, fi, "")
+  return {
+    track_index = idx,
+    fx_index    = fi,
+    fx_name     = fx_name or "",
+    inputs      = read_pins(0),
+    outputs     = read_pins(1),
+  }
 end
 
 -- ============================================================
@@ -2665,7 +2888,11 @@ function midi.midi_insert_notes_batch(p)
       local ch = math.floor(n.channel or 0)
       local startppq = reaper.MIDI_GetPPQPosFromProjTime(take, n.start)
       local endppq = reaper.MIDI_GetPPQPosFromProjTime(take, n["end"])
-      reaper.MIDI_InsertNote(take, false, false, startppq, endppq, ch, math.floor(n.pitch), math.floor(n.velocity), false)
+      -- noSortIn=true: skip REAPER's per-call resort of the whole note buffer
+      -- (paired with MIDI_DisableSort above + the single MIDI_Sort below) —
+      -- every other bulk-insert site in this file already does this; this
+      -- one was O(n^2) for large batches until fixed.
+      reaper.MIDI_InsertNote(take, false, false, startppq, endppq, ch, math.floor(n.pitch), math.floor(n.velocity), true)
       count = count + 1
     end
   end
@@ -2748,6 +2975,10 @@ function midi.midi_delete_all_notes(p)
   if not take then return nil, err end
   local _, count = reaper.MIDI_CountEvts(take)
   reaper.Undo_BeginBlock()
+  -- MIDI_DeleteNote has no noSortIn param — without DisableSort, REAPER
+  -- resorts the whole note buffer after every single delete (O(n^2) for
+  -- a large item).
+  reaper.MIDI_DisableSort(take)
   for i = count - 1, 0, -1 do reaper.MIDI_DeleteNote(take, i) end
   reaper.MIDI_Sort(take)
   reaper.Undo_EndBlock("MCP: midi_delete_all_notes (" .. count .. " notes)", -1)
@@ -3450,9 +3681,13 @@ function compose.edit_section(p)
         reaper.SetMediaItemInfo_Value(it, "D_LENGTH", start_time - item_pos)
       end
 
-      -- Delete notes in range (iterate backwards to preserve indices)
+      -- Delete notes in range (iterate backwards to preserve indices).
+      -- MIDI_DeleteNote has no noSortIn param — without DisableSort, REAPER
+      -- resorts the whole note buffer after every single delete (O(n^2)
+      -- for an item with many notes/CCs).
       if edit_notes then
         local _, note_count = reaper.MIDI_CountEvts(take)
+        reaper.MIDI_DisableSort(take)
         for ni = note_count - 1, 0, -1 do
           local _, _, _, startppq = reaper.MIDI_GetNote(take, ni)
           local note_time = reaper.MIDI_GetProjTimeFromPPQPos(take, startppq)
@@ -3461,11 +3696,13 @@ function compose.edit_section(p)
             notes_deleted = notes_deleted + 1
           end
         end
+        reaper.MIDI_Sort(take)
       end
 
       -- Delete CCs in range (iterate backwards)
       if edit_ccs then
         local _, _, cc_count = reaper.MIDI_CountEvts(take)
+        reaper.MIDI_DisableSort(take)
         for ci = cc_count - 1, 0, -1 do
           local _, _, _, ppq = reaper.MIDI_GetCC(take, ci)
           local cc_time = reaper.MIDI_GetProjTimeFromPPQPos(take, ppq)
@@ -3474,6 +3711,7 @@ function compose.edit_section(p)
             ccs_deleted = ccs_deleted + 1
           end
         end
+        reaper.MIDI_Sort(take)
       end
 
       -- Insert replacement content into FIRST overlapping item only (avoid duplicates)
@@ -3689,9 +3927,18 @@ function compose.setup_fx_chain(p)
     local ti = math.floor(entry.track_index)
     local tr = reaper.GetTrack(0, ti)
     if not tr then
-      reaper.PreventUIRefresh(-1)
-      reaper.Undo_EndBlock("setup_fx_chain", -1)
-      return nil, "Track not found: " .. ti
+      -- Real, confirmed robustness gap this closes: a single bad
+      -- track_index used to abort the ENTIRE batch (hard return, no
+      -- partial results, every other track's work discarded from the
+      -- response even if REAPER itself already applied it) - a bad FX
+      -- name/index within a track was already handled gracefully as a
+      -- per-entry error, so this inconsistency is exactly the kind of
+      -- thing that erodes trust in a batch tool and pushes a caller
+      -- back toward one-at-a-time calls it can verify individually.
+      -- Now consistent: report the error for this track and continue
+      -- processing the rest of the batch.
+      summary[#summary+1] = {track_index = ti, error = "Track not found: " .. ti}
+      goto next_track
     end
     local _, track_name = reaper.GetTrackName(tr)
     local track_result = {track_index = ti, track_name = track_name, fx_added = {}}
@@ -3754,20 +4001,34 @@ function compose.setup_fx_chain(p)
               local val = reaper.TrackFX_GetParam(tr, fx_idx, found)
               local _, fmt = reaper.TrackFX_FormatParamValue(tr, fx_idx, found, val, "")
               params_set[#params_set+1] = {name = param_name, index = found, value = val, display = fmt}
+            else
+              -- Real, confirmed robustness gap this closes: a param
+              -- name that didn't fuzzy-match anything used to be
+              -- silently dropped, with no error and no trace in the
+              -- response - unlike every other failure mode in this
+              -- function, which are all reported. A caller discovering
+              -- this only by separately checking fx_get_params
+              -- afterward (and finding a param it asked for was never
+              -- actually set) is exactly the kind of surprise that
+              -- erodes trust in a batch tool.
+              params_set[#params_set+1] = {name = param_name, error = "Parameter not found"}
             end
           end
         end
 
         -- Set params by index
         if fx_entry.params_by_index then
+          local num_params = reaper.TrackFX_GetNumParams(tr, fx_idx)
           for pi_str, param_val in sorted_index_pairs(fx_entry.params_by_index) do
             local pi = math.floor(tonumber(pi_str) or -1)
-            if pi >= 0 then
+            if pi >= 0 and pi < num_params then
               reaper.TrackFX_SetParam(tr, fx_idx, pi, param_val)
               local val = reaper.TrackFX_GetParam(tr, fx_idx, pi)
               local _, pn = reaper.TrackFX_GetParamName(tr, fx_idx, pi, "")
               local _, fmt = reaper.TrackFX_FormatParamValue(tr, fx_idx, pi, val, "")
               params_set[#params_set+1] = {name = pn, index = pi, value = val, display = fmt}
+            else
+              params_set[#params_set+1] = {index = pi, error = "Invalid parameter index"}
             end
           end
         end
@@ -3805,6 +4066,7 @@ function compose.setup_fx_chain(p)
     end
 
     summary[#summary+1] = track_result
+    ::next_track::
   end
 
   reaper.PreventUIRefresh(-1)
@@ -4952,9 +5214,17 @@ local function process_command()
     return
   end
 
+  -- Echoed back in the response so the Python client can tell a genuine
+  -- answer to THIS command apart from a stale response a still-running
+  -- earlier command writes after the client already timed out waiting for
+  -- it (REAPER's dispatch loop is single-threaded/synchronous, so that
+  -- earlier command keeps running to completion regardless of what the
+  -- client decided to do about its own timeout).
+  local req_id = cmd.id
+
   local handler = handlers[cmd.command]
   if not handler then
-    send_error("Unknown command: " .. tostring(cmd.command))
+    send_error("Unknown command: " .. tostring(cmd.command), req_id)
     return
   end
 
@@ -4963,16 +5233,16 @@ local function process_command()
     -- pcall failed — result contains the error message
     local errmsg = "Internal error: " .. tostring(result)
     reaper.ShowConsoleMsg("ReaperMCP: " .. errmsg .. "\n")
-    local sok, serr = pcall(send_error, errmsg)
+    local sok, serr = pcall(send_error, errmsg, req_id)
     if not sok then
       reaper.ShowConsoleMsg("ReaperMCP: Failed to send error response: " .. tostring(serr) .. "\n")
     end
   elseif err then
-    send_error(err)
+    send_error(err, req_id)
   elseif result then
-    send_success(result)
+    send_success(result, req_id)
   else
-    send_error("Command returned no data")
+    send_error("Command returned no data", req_id)
   end
 end
 

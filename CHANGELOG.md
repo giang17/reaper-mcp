@@ -2,7 +2,157 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
-## [Unreleased]
+## [0.6.8] - 2026-08-29
+
+### Added
+
+- **`project_export_audio` now does real, configurable rendering**: previously
+  it silently ignored its own `path`/`format` arguments and just opened
+  REAPER's raw render-dialog action — nothing on disk reflected what was
+  asked for. Now wires up `RENDER_FILE`/`RENDER_PATTERN`/`RENDER_FORMAT`/
+  `RENDER_SETTINGS` for real, triggered headlessly (no blocking dialog).
+  Two new modes: `source="master"` (one mixed-down file, as before) and
+  `source="stems"` (one file per track in `track_indices`, e.g. for
+  per-layer game-audio exports into FMOD/Wwise). Verified end-to-end
+  against a real project, including a REAPER-native edge case where a
+  track name containing `/` or `\` silently splits `$track`-pattern output
+  into a subfolder instead of one file — now caught with a clear error
+  naming the offending track instead of producing broken output.
+
+### Fixed
+
+- **`midi_insert_notes_batch` was O(n²) for large batches**: the Lua handler
+  called `MIDI_InsertNote(..., noSortIn=false)` inside the per-note loop,
+  forcing REAPER to re-sort the take's entire note buffer after every single
+  note instead of once at the end — every other bulk-insert site in the Lua
+  bridge (`compose_arrangement`, `compose_single_track`, `edit_section`)
+  already passed `noSortIn=true`; this one didn't. A few minutes of MIDI
+  across multiple tracks could take 5+ minutes to write. Also routed the
+  Python-side tool through the 600s `execute_long` budget instead of the 30s
+  `execute` default — `MAX_NOTES_PER_TRACK` (10000 notes/call) was always
+  large enough to legitimately exceed 30s, and a client-side timeout doesn't
+  cancel the Lua-side insert, it just stops listening for the response.
+- **Same O(n²) resort bug in two more places**: `midi_delete_all_notes` and
+  `edit_section`'s range-delete (notes and CCs) called `MIDI_DeleteNote`/
+  `MIDI_DeleteCC` in a loop with no `MIDI_DisableSort` — those two functions
+  have no `noSortIn` parameter at all, so `MIDI_DisableSort` is the only way
+  to avoid a full resort after every single delete. Both now wrap their
+  delete loops in `MIDI_DisableSort` + one trailing `MIDI_Sort`, matching
+  the pattern already used everywhere else in the file.
+- **IPC responses had no request/response correlation**: `command.json` /
+  `response.json` were matched purely by being "the next file there," with
+  no id tying a response to the command that asked for it. REAPER's Lua
+  dispatch loop is single-threaded and fully synchronous per command — if
+  the Python client times out and gives up on a slow command, the Lua side
+  keeps running it to completion regardless, and its eventual response could
+  get silently misread as the answer to a *later, unrelated* command sent in
+  the meantime. Commands now carry a UUID the Lua bridge echoes back;
+  responses whose id doesn't match the in-flight request are discarded as
+  stale rather than accepted. Backward-compatible: a response with no id at
+  all (an old, not-yet-reloaded Lua bridge) is still accepted unconditionally.
+
+## [0.6.7] - 2026-08-24
+
+### Added
+
+- **Exact Tool Allowlists & Custom Profiles (Issue #24)**: Extended the profile
+  system from module-level filtering to exact tool-level allowlists/blocklists
+  via `ToolProfile` (`include_tools`, `exclude_tools`, `include_modules`,
+  `exclude_modules`). Introduced `ToolFilterProxy` to dynamically intercept
+  and filter `@mcp.tool()` registrations during module loading.
+- **Profile Configuration Files & Overrides (Issue #24)**: Added support for
+  loading custom profiles from local `.toml` or `.json` files via
+  `REAPER_MCP_PROFILE_FILE`, plus fine-grained environment variable overrides:
+  `REAPER_MCP_INCLUDE_TOOLS`, `REAPER_MCP_EXCLUDE_TOOLS`,
+  `REAPER_MCP_INCLUDE_MODULES`, and `REAPER_MCP_EXCLUDE_MODULES`.
+- **Profile-Scoped Instruction Packs (Issue #24)**: Split the monolithic
+  instruction file into 8 composable markdown packs (`00_critical_rules.md`,
+  `10_composition.md`, `20_automation.md`, `30_mixing.md`, `40_editing.md`,
+  `50_postproduction.md`, `60_bbc_spitfire.md`, `70_style_cheat_sheet.md`).
+  Profiles now only load the instructions relevant to their active tools,
+  cutting instruction context by up to ~85% for narrow profiles while keeping
+  safety rules intact.
+- **Profile Introspection CLI (Issue #24)**: Added `reaper-mcp --profile-info
+  <profile> [--json]` and `describe_profile(...)` to measure registered tool
+  counts, tool schema size, and instruction token footprints.
+- **Read-Only FX Pin Mappings Inspection (Issue #23)**: Added `fx_get_pin_mappings`
+  tool wrapping REAPER's `TrackFX_GetPinMappings` to inspect input and output
+  pin configurations (channel lists and raw 32-bit bitmasks) non-destructively
+  before automating sidechain or multi-channel parameters.
+- **Extended Send Inspection & Channel Mapping (Issue #23)**: `send_get_all` now
+  reports `send_mode` (`raw` integer and human-readable `name` such as
+  `post_fader`, `pre_fader_post_fx`) and `audio` routing (`source_channel_raw`,
+  `destination_channel_raw`, and human-readable `interpreted` string e.g. `1/2 -> 3/4`).
+- **Track Channel Count (Issue #23)**: `track_get_all` and `track_get_info` now
+  include `channel_count` (`I_NCHAN`), normalizing REAPER's `0` default sentinel
+  to `2` so callers always receive a concrete channel count.
+
+## [0.6.6] - 2026-08-22
+
+### Fixed
+
+- **`infer_curve` returned `"unknown"` for every bipolar parameter** (EQ
+  band gain, compressor makeup, pan, trim) instead of `"linear"`, because
+  `_NUMBER_RE` only accepted a leading `-`, not `+` — plugins format
+  bipolar controls with an explicit `+` above zero, so the sample above
+  zero failed to parse and `numeric_count` dropped below `len(samples)`.
+  Reported with an exact repro against a real FabFilter Pro-Q 4 band-gain
+  sweep by **[@SNChicago](https://github.com/SNChicago)** in
+  [#22](https://github.com/xDarkzx/Reaper-MCP/issues/22), including the
+  root cause, the one-character fix, and why the existing test suite
+  (unipolar only) couldn't catch it. Thank you!
+
+## [0.6.5] - 2026-08-22
+
+### Fixed
+
+- **The `mixing` tool profile excluded `setup_fx_chain`/`setup_effect_bus`**
+  (they live in `compose_edit_tools.py`, a module-naming/boundary mismatch,
+  not deliberate) — real, confirmed impact: an MCP client scoped to
+  `mixing` for FX/mix work couldn't reach the batch FX-setup tools at all,
+  silently pushed back toward many individual fx_add/fx_set_param calls
+  instead, exactly the per-call overhead the profile system exists to
+  avoid. `mixing` now includes `compose_edit_tools`: 82 tools (was ~71),
+  still a 55%+ cut from `full`'s 181. Corrected the profile table's
+  tool counts in `docs/TOOLS.md` too (were stale approximations).
+
+
+- **`setup_fx_chain` (batch add/configure FX across tracks — has existed
+  since 2026-07-17) had two real robustness gaps that plausibly explain
+  why callers avoided it in favor of many individual fx_add/fx_set_param
+  calls despite it already covering that case:** a single bad
+  `track_index` aborted the *entire* batch with a hard error and no
+  partial results, inconsistent with a bad FX name/index within a track
+  (already handled gracefully, per-entry); and a `params`/
+  `params_by_index` entry that didn't match any real parameter was
+  silently dropped with no error at all. Both now report per-item in the
+  response's `summary` instead — a bad item fails on its own, the rest of
+  the batch still completes. Also rewrote the tool's docstring with
+  concrete examples (same plugin to several tracks in one call; batch-
+  editing an already-existing FX's params by index) — the underlying
+  capability wasn't new, just not discoverable enough.
+
+
+- **`fx_scan_params` only sampled 3 fixed points (0.0/0.5/1.0), which is
+  useless for stepped/categorical parameters** like Pro-Q 3's "Shape"
+  dropdown (~8 real values: Bell, Low Shelf, Low Cut, High Shelf, High
+  Cut, Notch, Band Pass, Flat Tilt) — only ever revealing 3 of them and
+  forcing manual binary-search guessing for the rest, a real, reported
+  pain point. Now uses REAPER's own `TrackFX_GetParameterStepCount` to
+  detect genuinely stepped parameters and sample *every* discrete value
+  exactly, and samples continuous parameters (Frequency, Gain, etc.) at
+  9 points instead of 3 for meaningfully better interpolation precision.
+  Each sample now also reports its exact normalized value alongside the
+  formatted display string, not just the display string alone.
+  `infer_curve` (in `reaper_mcp_shared/plugin_cache.py`) now trusts
+  REAPER's step-count signal directly instead of guessing from sample
+  patterns, and works with however many points were actually sampled
+  (was hardcoded to exactly 3).
+- The per-machine VST/AU parameter scan cache (`reaper_mcp_shared/
+  plugin_maps/`) was never gitignored — a real risk of accidentally
+  shipping one machine's specific-plugin-version scan results to every
+  other user. Now ignored; deleted the one stale (old 3-point-sampling
+  format) cache file already present.
 
 ## [0.6.4] - 2026-08-12
 
@@ -253,7 +403,6 @@ None of this changes the package itself.
   "clear" automation, a worked dB→linear-gain conversion table, and a
   reminder to verify writes with `envelope_get_points` rather than assume.
 
-### Fixed
 
 - **`create_drum_pattern`/`create_chord_progression`/`load_loops` read the
   auto-created item/track index from the wrong place in the bridge
@@ -520,7 +669,6 @@ None of this changes the package itself.
   - `analyze_stereo_field(wav_path)` — phase correlation, mid / side RMS, side-to-mid ratio, mono-compatibility hint.
 - **Optional `[analysis]` extras** — `numpy`, `soundfile`, `pyloudnorm`. Install with `pip install -e ".[analysis]"`. Tools degrade silently and log a one-line hint to stderr if deps are missing, so the server stays up.
 
-### Fixed
 
 - **`install.sh` used the wrong Python on Macs with both Intel and Apple
   Silicon Homebrew installed.** The PATH setup always let `/usr/local/bin`
