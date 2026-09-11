@@ -2,6 +2,101 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [0.7.0] - 2026-09-11
+
+### Added
+
+- **`list_audio_subfolders`**: fast folder-tree discovery for a large audio
+  library — directory names and a cheap per-folder audio-file count, no
+  per-file metadata work. Use before `scan_audio_folder` on a library of
+  thousands of files to see its shape (genre/category folders are almost
+  always real subfolders) instead of scanning everything blindly.
+- **`scan_audio_folder` gains `query`/`min_bpm`/`max_bpm`/`role`/`key`
+  filters**, all combinable. `query` is multi-term AND matching against
+  the full path (covers genre/style words and specific naming alike, e.g.
+  "techno kick" or "laugh"). With any filter active, `max_files` caps
+  matches found, not files visited, so the walk searches past
+  non-matching files instead of stopping after the first batch of them —
+  verified live against a real 300+ file, 31-subfolder library
+  (`query="attack"` found 52 matches across the whole tree in one call).
+- **`loops_tools` (audio search: `scan_audio_folder`,
+  `list_audio_subfolders`, `detect_common_bpm`, `load_loops`) is now
+  available in every tool profile** (`mixing`, `analysis`, `minimal`,
+  `production` were missing it) — finding and importing audio isn't
+  specific to any one workflow.
+
+### Fixed
+
+- **`marker_add`/`marker_add_region`/`add_markers_batch` returned a
+  marker/region's reusable display NUMBER mislabeled as (or, in
+  `add_markers_batch`, literally named) an INDEX.** REAPER reuses a
+  freed number once its marker is deleted, so the two diverge as soon as
+  any earlier marker is deleted — verified live: deleting the 1st of 3
+  markers then adding a 4th returned number=1 (reused) while its real
+  enumeration index was 2. Passing that value into a follow-up
+  marker_delete/marker_edit/markers_apply call would silently target
+  whatever marker actually sits at that index instead. All three now
+  resolve the real index by scanning after the insert (matching
+  `item_duplicate`'s fix for the same class of bug); `add_markers_batch`
+  resolves every entry's index in one pass after all inserts are done,
+  not per-entry, since a later entry positioned earlier in time than one
+  already added would shift that earlier entry's index out from under a
+  per-entry resolution — verified with exactly that scenario.
+- **`_parse_key` (loop filename key detection) didn't recognize a bare
+  major-key letter** (e.g. "D" with no accidental or major/minor suffix)
+  at all — only keys with an accidental (`F#`) or quality (`Dm`, `Cmaj`)
+  were matched. Real files like `Sub_Bass_D_130.wav` parsed as
+  `key: null`. Now matches bare letters too (accepted tradeoff: a stray
+  single-letter token that means something else, e.g. a take/version/mic
+  label, can occasionally false-match as a key).
+
+## [0.6.9] - 2026-09-11
+
+### Removed
+
+- **`fx_add`, `fx_set_param`, and `fx_set_param_by_name` are no longer
+  exposed as tools.** `setup_fx_chain` already covered every case these
+  handled — including a single plugin on a single track — with strictly
+  more safety: it applies params in the order some plugins require
+  (confirmed: FabFilter Pro-Q 3/Pro-C 2 need a band's Used/Enabled flag
+  written before its other params, or the write has no audible effect).
+  Traced live: an AI session used the single-shot tools directly, hit
+  exactly that ordering gap on a fresh Pro-Q 3 band, and misdiagnosed the
+  silent no-op as "needs the plugin UI open" — it doesn't; headless writes
+  work fine, verified against a real REAPER instance. Also fixed the
+  `production` tool profile, which was missing `compose_edit_tools` (the
+  module `setup_fx_chain`/`setup_effect_bus` live in) despite its own
+  description promising FX-chain support — that gap is what put the AI
+  session on the single-shot tools in the first place. The underlying Lua
+  handlers are untouched (still used internally, e.g. by `demo_tools`).
+
+### Fixed
+
+- **`item_clone_to_position` and `chops_create_virtual_slice` had the same two
+  defects reported and fixed in `item_duplicate` (#30/#31)**, found in a
+  hardening pass after that fix landed: both returned a pre-insert
+  `CountMediaItems()` as the new item's index, which is wrong as soon as
+  there's an item on any later track — exactly the scenario `chop_pipeline`
+  and `stack_chop_layers` create by placing chops and harmony layers across
+  multiple tracks in a loop. `item_clone_to_position` also copied the source
+  item's state chunk verbatim, so a pitch-shifted MIDI harmony layer from
+  `stack_chop_layers` would silently alias the source's `POOLEDEVTS` MIDI
+  event pool — editing one layer's notes would edit them all. Both now
+  resolve their index from a post-insert scan, and `item_clone_to_position`
+  reuses the `reguid_item_chunk()` helper `item_duplicate`'s fix introduced.
+
+- **`track_template_apply` left two tracks sharing one `TRACKID`**: same
+  identity class of bug as above, one level up. `track_set_state_chunk`
+  pasted a saved track's full state chunk onto the target track verbatim,
+  including the source track's own `TRACKID`. Verified live: saving track
+  A's state and applying it to track B left track B with track A's exact
+  `TRACKID` — with track A still in the project, two live tracks shared one
+  identity (the field REAPER's region render matrix and other per-track
+  GUID references use to tell tracks apart). `track_set_state_chunk` now
+  regenerates `TRACKID` before applying, the same way item chunks are
+  reguided; verified live again after the fix that the target track gets a
+  fresh id matching neither its own original nor the source's.
+
 ## [0.6.8] - 2026-08-29
 
 ### Added
