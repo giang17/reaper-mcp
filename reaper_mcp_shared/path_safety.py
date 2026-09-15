@@ -25,7 +25,15 @@ _BLOCKED_DIRS_NIX = [
 
 
 def _is_blocked(resolved: str, blocked: str) -> bool:
-    return resolved == blocked or resolved.startswith(blocked + os.sep)
+    # blocked must be resolved through realpath the same way `resolved`
+    # already was - on macOS several of these top-level dirs are actually
+    # symlinks (/etc -> /private/etc, same pattern as /tmp and /var), so
+    # comparing a resolved input path against the literal unresolved
+    # "/etc" never matches there. realpath() on a path that doesn't exist
+    # on this OS (e.g. /proc on macOS) just returns it unchanged, so this
+    # is safe to call unconditionally.
+    blocked_resolved = os.path.realpath(blocked)
+    return resolved == blocked_resolved or resolved.startswith(blocked_resolved + os.sep)
 
 
 # Hardcoded, not user-configurable (by design - this is a security floor,

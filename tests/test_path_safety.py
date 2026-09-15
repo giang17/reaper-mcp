@@ -74,6 +74,30 @@ class TestSafePath:
         with pytest.raises(ReaperMCPError):
             safe_path("/etc")
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX-specific blocklist")
+    def test_blocks_etc_when_it_is_itself_a_symlink(self, monkeypatch):
+        # Real bug, caught by CI on macOS: /etc there is a symlink to
+        # /private/etc (same pattern as /tmp and /var). safe_path resolves
+        # the INPUT through realpath, so "/etc" becomes "/private/etc" -
+        # but the blocklist previously compared that against the literal,
+        # unresolved "/etc" and never matched. Simulated here (rather than
+        # relying on a real macOS symlink) so this is caught on every OS,
+        # not just macOS CI runners.
+        real_realpath = os.path.realpath
+
+        def fake_realpath(p):
+            if p == "/etc":
+                return "/private/etc"
+            if p.startswith("/etc" + os.sep):
+                return "/private/etc" + p[len("/etc"):]
+            return real_realpath(p)
+
+        monkeypatch.setattr(os.path, "realpath", fake_realpath)
+        with pytest.raises(ReaperMCPError):
+            safe_path("/etc")
+        with pytest.raises(ReaperMCPError):
+            safe_path("/etc/passwd")
+
 
 class TestIsExcludedDirName:
     @pytest.mark.parametrize("name", [".ssh", ".git", ".gnupg", ".aws", ".SSH", ".GIT"])
