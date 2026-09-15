@@ -33,7 +33,7 @@ def register(mcp: FastMCP):
         return await client.execute("fx_get_chain", track_index=track_index)
 
     @mcp.tool()
-    async def fx_get_params(track_index: int, fx_index: int) -> dict:
+    async def fx_get_params(track_index: int, fx_index: int, max_results: int = 300) -> dict:
         """Get all parameters of an FX plugin (names, values, formatted display).
 
         Automatically filters out junk params (Internal, MIDI CC, unused FabFilter bands)
@@ -42,12 +42,24 @@ def register(mcp: FastMCP):
         Args:
             track_index: 0-based track index.
             fx_index: 0-based FX chain index.
+            max_results: Cap on returned (post-filter) params (default 300,
+                hard ceiling 2000) — junk filtering handles the common case
+                (e.g. FabFilter Pro-Q's ~500 params), this is the backstop
+                for any plugin with a genuinely large number of real params.
+                `truncated` in the response says whether more exist.
         """
         if track_index < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
         if fx_index < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "fx_index must be >= 0")
-        return await client.execute("fx_get_params", track_index=track_index, fx_index=fx_index)
+        if max_results <= 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "max_results must be > 0")
+        if max_results > 2000:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE,
+                                 "max_results cannot exceed 2000 (would blow context size)")
+        return await client.execute(
+            "fx_get_params", track_index=track_index, fx_index=fx_index, max_results=max_results,
+        )
 
     @mcp.tool()
     async def fx_scan_params(track_index: int, fx_index: int) -> dict:

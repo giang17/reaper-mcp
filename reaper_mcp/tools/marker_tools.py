@@ -52,10 +52,21 @@ def register(mcp: FastMCP):
     from reaper_mcp.main import client
 
     @mcp.tool()
-    async def marker_get_all() -> dict:
+    async def marker_get_all(max_results: int = 500) -> dict:
         """Get all markers and regions. For just the region list plus a cheap
-        project overview, prefer project_get_overview() instead."""
-        return await client.execute("marker_get_all")
+        project overview, prefer project_get_overview() instead.
+
+        Args:
+            max_results: Cap on returned markers/regions (default 500, hard
+                ceiling 5000, prevents context blow-up on a marker-heavy
+                project). `truncated` in the response says whether more exist.
+        """
+        if max_results <= 0:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "max_results must be > 0")
+        if max_results > 5000:
+            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE,
+                                 "max_results cannot exceed 5000 (would blow context size)")
+        return await client.execute("marker_get_all", max_results=max_results)
 
     @mcp.tool()
     async def marker_add(position: float, name: str = "", color_r: int = 0, color_g: int = 0, color_b: int = 0) -> dict:

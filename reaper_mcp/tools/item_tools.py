@@ -64,14 +64,7 @@ def register(mcp: FastMCP):
         if max_results > 2000:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE,
                                  "max_results cannot exceed 2000 (would blow context size)")
-        result = await client.execute("item_get_all", track_index=track_index)
-        payload = result.get("data", result)
-        items = payload.get("items", [])
-        if len(items) > max_results:
-            payload["items"] = items[:max_results]
-            payload["truncated"] = True
-            payload["returned"] = max_results
-        return result
+        return await client.execute("item_get_all", track_index=track_index, max_results=max_results)
 
     @mcp.tool()
     async def item_get_info(item_index: int) -> dict:

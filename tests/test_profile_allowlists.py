@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 
 from reaper_mcp.instructions import load_instructions
 from reaper_mcp.tool_registry import (
+    BUILTIN_PROFILES,
     ToolFilterProxy,
     ToolProfile,
     describe_profile,
@@ -134,6 +135,24 @@ def test_describe_profile_metrics():
     full_info = describe_profile("full")
     assert full_info.tool_count >= 170
     assert full_info.instruction_chars > minimal_info.instruction_chars
+
+
+def test_composition_pack_profiles_have_compose_tools_module():
+    # Found twice now: a profile loading the "composition" instruction pack
+    # (which tells the AI to call get_track_instruments/analyze_score/
+    # compose_arrangement) but not including the compose_tools module means
+    # those tools don't exist for that profile even though the loaded
+    # instructions assume they do. First seen with setup_fx_chain +
+    # compose_edit_tools on 'production'; same shape here.
+    for name, profile in BUILTIN_PROFILES.items():
+        if profile.instruction_packs is None:
+            continue  # None == "full" (all packs, all modules)
+        if "composition" not in profile.instruction_packs:
+            continue
+        assert profile.include_modules is None or "compose_tools" in profile.include_modules, (
+            f"profile '{name}' loads the composition instruction pack but doesn't "
+            "include the compose_tools module"
+        )
 
 
 def test_exact_tool_allowlist_registration():

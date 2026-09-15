@@ -25,7 +25,11 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
-from reaper_mcp_shared.path_safety import safe_path
+from reaper_mcp_shared.path_safety import (
+    is_excluded_file_name,
+    prune_unsafe_subdirs,
+    safe_path,
+)
 
 
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".aif", ".aiff", ".ogg", ".m4a"}
@@ -39,18 +43,54 @@ _MAX_SCAN_ENTRIES = 50_000
 _MAX_SUBFOLDERS = 2000
 
 
+def _iter_audio_files(root: Path, recursive: bool):
+    """Yield audio-extension files under root, safely.
+
+    root must already be the real, resolved path (from safe_path). Uses
+    os.walk (not Path.rglob) specifically because os.walk lets dirnames be
+    pruned in place before descent - the only way to stop a walk from
+    following a symlink/junction to somewhere outside root, or into a
+    known secrets-adjacent directory. rglob has no equivalent hook and
+    will walk through both. See prune_unsafe_subdirs for why this matters.
+    """
+    if not recursive:
+        for entry in root.iterdir():
+            if (
+                entry.is_file()
+                and entry.suffix.lower() in AUDIO_EXTS
+                and not is_excluded_file_name(entry.name)
+            ):
+                yield entry
+        return
+
+    root_realpath = str(root)
+    for dirpath, dirnames, filenames in os.walk(root):
+        prune_unsafe_subdirs(dirnames, dirpath, root_realpath)
+        for name in filenames:
+            if Path(name).suffix.lower() in AUDIO_EXTS and not is_excluded_file_name(name):
+                yield Path(dirpath) / name
+
+
 def _walk_subfolders(root: Path, max_depth: int) -> tuple[list[dict], bool]:
     """List subfolders under root up to max_depth, each with a cheap audio
     file count (from directory entries already being enumerated - no
     stat/duration/metadata work per file). Depth 0 = root's immediate
     children only. Returns (folders, truncated).
+
+    root must already be the real, resolved path (from safe_path) - every
+    subdirectory encountered during the walk is pruned via
+    prune_unsafe_subdirs before descent, so a symlink/junction anywhere in
+    the tree can't redirect the walk outside root or into a known
+    secrets-adjacent directory (.ssh, .git, ...).
     """
     folders: list[dict] = []
     truncated = False
     root_depth = len(root.parts)
+    root_realpath = str(root)
 
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
+        prune_unsafe_subdirs(dirnames, dirpath, root_realpath)
         depth = len(current.parts) - root_depth
         if depth >= max_depth:
             dirnames[:] = []  # don't descend further
@@ -59,7 +99,10 @@ def _walk_subfolders(root: Path, max_depth: int) -> tuple[list[dict], bool]:
         if len(folders) >= _MAX_SUBFOLDERS:
             truncated = True
             break
-        audio_count = sum(1 for f in filenames if Path(f).suffix.lower() in AUDIO_EXTS)
+        audio_count = sum(
+            1 for f in filenames
+            if Path(f).suffix.lower() in AUDIO_EXTS and not is_excluded_file_name(f)
+        )
         folders.append({
             "path": str(current),
             "relative_path": str(current.relative_to(root)),
@@ -267,8 +310,10 @@ def _safe_folder(path: str) -> Path:
     """
     if not path or not path.strip():
         raise ReaperMCPError(ErrorCode.INVALID_PATH, "folder path is required")
-    p = Path(path).expanduser().resolve()
-    safe_path(str(p))
+    # Use safe_path's own resolved return value (not a separately-computed
+    # Path.resolve()) so the root every walk is anchored to is the exact
+    # string that was actually validated against the blocklist.
+    p = Path(safe_path(path))
     if not p.exists():
         raise ReaperMCPError(ErrorCode.INVALID_PATH, f"Folder not found: {p}")
     if not p.is_dir():
@@ -352,14 +397,8 @@ def register(mcp: FastMCP):
         truncated = False
         scanned = 0
 
-        walker = folder.rglob("*") if recursive else folder.iterdir()
         try:
-            for p in walker:
-                if not p.is_file():
-                    continue
-                if p.suffix.lower() not in AUDIO_EXTS:
-                    continue
-
+            for p in _iter_audio_files(folder, recursive):
                 if has_filter:
                     if len(loops) >= max_files:
                         truncated = True
@@ -632,6 +671,16 @@ def register(mcp: FastMCP):
                 continue
             if position_sec < 0:
                 errors.append({"index": i, "error": "position_sec must be >= 0"})
+                continue
+            # Same guard item_insert_media's own tool wrapper applies -
+            # this calls the identical underlying command directly, which
+            # would otherwise skip it entirely (confirmed gap: file_path
+            # here had zero path-safety validation, unlike every other
+            # path-accepting tool in the codebase).
+            try:
+                file_path = safe_path(file_path)
+            except ReaperMCPError as e:
+                errors.append({"index": i, "track_name": track_name, "error": str(e)})
                 continue
             if not os.path.isfile(file_path):
                 errors.append({
