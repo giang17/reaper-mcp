@@ -684,7 +684,8 @@ local function build_fx_chain(tr)
   }
 end
 
-local function build_fx_params(tr, fx_idx)
+local function build_fx_params(tr, fx_idx, max_results)
+  max_results = max_results or 300
   local _, fx_name = reaper.TrackFX_GetFXName(tr, fx_idx, "")
   local _, preset = reaper.TrackFX_GetPreset(tr, fx_idx, "")
   local num = reaper.TrackFX_GetNumParams(tr, fx_idx)
@@ -707,7 +708,18 @@ local function build_fx_params(tr, fx_idx)
     end
   end
 
+  local capped = false
   for i = 0, num - 1 do
+    if #params >= max_results then
+      -- Junk-filtering handles the common large-plugin case (e.g.
+      -- FabFilter Pro-Q's ~500 params); this is the backstop for any
+      -- plugin with a genuinely large number of real, non-junk params -
+      -- without it, a huge instrument could still return an unbounded
+      -- response the same way item_get_all/marker_get_all did before
+      -- they got the same kind of cap.
+      capped = true
+      break
+    end
     local _, pname = reaper.TrackFX_GetParamName(tr, fx_idx, i, "")
     local val = reaper.TrackFX_GetParam(tr, fx_idx, i)
 
@@ -739,6 +751,7 @@ local function build_fx_params(tr, fx_idx)
     param_count = num,
     params_shown = #params,
     params_skipped = skipped,
+    truncated = capped,
     params = params
   }
 end
@@ -1447,7 +1460,7 @@ function fx.fx_get_params(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
   if not p.fx_index then return nil, "Missing parameter: fx_index" end
-  return build_fx_params(tr, math.floor(p.fx_index))
+  return build_fx_params(tr, math.floor(p.fx_index), p.max_results)
 end
 
 function fx.fx_set_param(p)
@@ -1809,28 +1822,39 @@ local item = {}
 function item.item_get_all(p)
   local items = {}
   local track_idx = p.track_index or -1
+  local max_results = p.max_results or 200
+  local total = reaper.CountMediaItems(0)
+  local returned = 0
+  local candidates = 0  -- how many items matched the filter, before capping
   if track_idx >= 0 then
     local tr = reaper.GetTrack(0, math.floor(track_idx))
     if tr then
-      local n = reaper.CountTrackMediaItems(tr)
-      local total = reaper.CountMediaItems(0)
-      for i = 0, n - 1 do
+      -- Build a pointer -> global-index map in one O(total) pass instead
+      -- of a linear scan per track item (was O(n_on_track * total)) - same
+      -- fix as item_split_at_transients' index_by_item map elsewhere in
+      -- this file, applied here for the same reason: a per-item full-
+      -- project rescan is slow on a large project.
+      local index_by_item = {}
+      for gi = 0, total - 1 do
+        index_by_item[reaper.GetMediaItem(0, gi)] = gi
+      end
+      candidates = reaper.CountTrackMediaItems(tr)
+      for i = 0, candidates - 1 do
+        if returned >= max_results then break end
         local it = reaper.GetTrackMediaItem(tr, i)
-        -- Find global item index (not per-track)
-        local global_idx = -1
-        for gi = 0, total - 1 do
-          if reaper.GetMediaItem(0, gi) == it then global_idx = gi; break end
-        end
-        items[#items+1] = build_item_info(it, global_idx)
+        items[#items+1] = build_item_info(it, index_by_item[it] or -1)
+        returned = returned + 1
       end
     end
   else
-    local n = reaper.CountMediaItems(0)
-    for i = 0, n - 1 do
+    candidates = total
+    for i = 0, total - 1 do
+      if returned >= max_results then break end
       items[#items+1] = build_item_info(reaper.GetMediaItem(0, i), i)
+      returned = returned + 1
     end
   end
-  return {items = items, total_items = reaper.CountMediaItems(0)}
+  return {items = items, total_items = total, returned = returned, truncated = candidates > returned}
 end
 
 function item.item_get_info(p)
@@ -2560,15 +2584,17 @@ local marker = {}
 
 function marker.marker_get_all(p)
   local count = reaper.CountProjectMarkers(0)
+  local max_results = (p and p.max_results) or 500
   local markers = {}
-  for i = 0, count - 1 do
+  local returned = math.min(count, max_results)
+  for i = 0, returned - 1 do
     local _, isrgn, pos, rgnend, name, num, color = reaper.EnumProjectMarkers3(0, i)
     markers[#markers+1] = {
       index = i, number = num, is_region = isrgn,
       position = pos, region_end = rgnend, name = name, color = color
     }
   end
-  return {count = count, markers = markers}
+  return {count = count, returned = returned, truncated = count > returned, markers = markers}
 end
 
 -- AddProjectMarker2 returns the marker/region's NUMBER (a persistent

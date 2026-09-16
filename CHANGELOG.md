@@ -2,6 +2,99 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [0.7.1] - 2026-09-16
+
+### Added
+
+- **New `test_lua_syntax.py`** — actually compiles `reaper_mcp_server.lua`
+  with `lupa` in CI. Every existing Lua test checks the source as text,
+  none of them parse it, so a real syntax error could go unnoticed until
+  someone tried to run it in REAPER.
+
+### Fixed
+
+- **`production` profile loaded the composition instructions without the
+  tools they reference.** It includes the `composition` instruction pack
+  (which tells the AI to call `get_track_instruments`/`analyze_score`/
+  `compose_arrangement`) but its `include_modules` never listed
+  `compose_tools`, the module those tools live in — same shape as the
+  earlier `setup_fx_chain`/`compose_edit_tools` gap. Added `compose_tools`
+  to the profile; added a regression test asserting every profile that
+  loads the `composition` pack also includes the module.
+- **`item_get_all`'s `max_results` did nothing on the actual cost of a
+  large project.** Its Python wrapper validated the cap but never
+  forwarded it to Lua — every call enumerated and JSON-encoded *every*
+  item in the project, wrote the full result to the IPC file, and only
+  then sliced it down to size in Python, discarding the rest. Unlike
+  `midi_get_notes`/`envelope_get_points` (confirmed to already stop
+  enumerating in Lua once the cap is hit), the cap only ever trimmed the
+  final response — none of the real per-call cost. Lua now stops
+  enumerating at `max_results` directly, and reports a `truncated` flag.
+- **`item_get_all`'s track-filtered branch resolved each item's global
+  index with a per-item linear rescan of the whole project** (O(items on
+  track × total items)) instead of the one-pass pointer-to-index map
+  `item_split_at_transients` already uses elsewhere in this same file for
+  the identical problem. Switched to the same one-pass map.
+- **`marker_get_all` had no result cap at all** — unlike every sibling
+  bulk-read tool (`item_get_all`, `midi_get_notes`, `envelope_get_points`),
+  a marker/region-heavy project (podcast edits, game-audio cue points)
+  could return an unbounded response. Added `max_results` (default 500,
+  hard ceiling 5000), enumerated with an early stop in Lua the same way,
+  with a `truncated` flag.
+- **`fx_get_params` had no absolute cap** — it already filters known junk
+  (MIDI CC, internal params, unused FabFilter bands), which handles the
+  common large-plugin case, but a plugin with a genuinely large number of
+  real, non-junk params had no backstop. Added `max_results` (default
+  300, hard ceiling 2000) with the same early-stop-in-Lua + `truncated`
+  pattern; the underlying `build_fx_params` also gets a default so
+  `fx_set_preset`'s opt-in `include_params` path is protected too, not
+  just the one caller that now passes `max_results` explicitly.
+
+### Security
+
+- **`load_loops`'s `file_path` had zero path-safety validation.** It
+  calls the same underlying `item_insert_media` command its own tool
+  wrapper does, but directly, skipping the wrapper's `safe_path` check
+  entirely — the one path parameter in the codebase confirmed to have
+  this gap after auditing every `client.execute` call site that passes a
+  path-like argument. Not a code-execution risk (REAPER decodes media,
+  it doesn't execute it), but inconsistent with every other path-accepting
+  tool. Now validated the same way.
+- **Recursive folder-scan sandbox escape via symlink/junction.**
+  `safe_path` only validates the top-level path a caller supplies, once —
+  it was never re-checked against anything a recursive walk actually
+  descended into. Verified live: a plain NTFS junction placed inside an
+  otherwise-legitimate, already-validated folder made both
+  `scan_audio_folder` (pathlib `rglob`) and `list_audio_subfolders`
+  (`os.walk`) return files from a completely separate, never-validated
+  directory — a complete bypass of the system-directory blocklist, since
+  escaping via the walk isn't restricted to it at all once outside the
+  validated root. Fixed by re-validating every directory a walk is about
+  to descend into (`prune_unsafe_subdirs`, new shared helper in
+  `path_safety.py`): each subdirectory's real path (after resolving
+  symlinks/junctions) must still resolve inside the original root, or it's
+  pruned before descent. `scan_audio_folder`'s walk moved from `rglob` to
+  `os.walk` to get this pruning hook (`rglob` has no equivalent).
+- **Added a hardcoded, non-configurable exclude list** for recursive
+  folder scans: known secrets-adjacent directory names (`.ssh`, `.git`,
+  `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`, ...) are always pruned
+  before descent, and common credential/secret file basenames (`.env`,
+  `id_rsa`, `known_hosts`, `.netrc`, ...) are always excluded from scan
+  results — defense-in-depth on top of the sandbox-escape fix, not
+  user-overridable.
+- **`safe_path`'s "Path must be absolute" check was dead code** — it ran
+  on the value *after* `os.path.realpath()`, which resolves a relative
+  path against the server process's cwd and makes it absolute, so the
+  check could never fire. A relative path was silently accepted and
+  resolved against whatever directory the server happened to be launched
+  from, instead of being rejected. Now checked on the original input
+  before resolution. (The similar-looking literal `".."` traversal check
+  was confirmed, by contrast, to be genuinely redundant rather than
+  broken — normpath/realpath already collapse traversal sequences before
+  it runs, and the resulting canonical path is what the blocklist check
+  below actually catches; verified live that a traversal path built to
+  land on the real system directory is still correctly blocked.)
+
 ## [0.7.0] - 2026-09-11
 
 ### Added

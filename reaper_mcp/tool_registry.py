@@ -124,7 +124,7 @@ BUILTIN_PROFILES: dict[str, ToolProfile] = {
             "take_tools", "midi_tools", "quantize_tools", "selection_tools",
             "fx_tools", "inventory_tools", "mix_tools", "sidechain_tools",
             "envelope_tools", "send_tools", "pipeline_tools", "compose_edit_tools",
-            "loops_tools",
+            "loops_tools", "compose_tools",
         },
         instruction_packs=["core", "composition", "automation", "mixing", "styles"],
     ),

@@ -4,6 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # mcp 2.x breaks this codebase (ModuleNotFoundError:
+      # mcp.server.fastmcp moved/changed) - rejected twice already
+      # (#20, #28) and kept coming back every few weeks because closing
+      # the PR doesn't stop Dependabot from re-proposing it. This is the
+      # permanent stop. Remove once the codebase is actually migrated
+      # to mcp 2.x.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

@@ -14,7 +14,7 @@ Set `REAPER_MCP_PROFILE=<name>` in your MCP client's server config to register o
 |---------|--------:|------------:|------------------:|----------|
 | `full` | 27 | 180 | ~13.2k | Default. You're on Claude / GPT-4 / Gemini-class models. |
 | `composition` | 17 | 137 | ~7.6k | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
-| `production` | 17 | 140 | ~10.1k | MIDI instruments, stem bouncing, FX chains (`setup_fx_chain`/`setup_effect_bus`), and mixing. Drops arrangement helpers (patterns/chops). |
+| `production` | 18 | 143 | ~10.1k | MIDI instruments, stem bouncing, FX chains (`setup_fx_chain`/`setup_effect_bus`), and mixing. Also gets `compose_tools` (`get_track_instruments`/`analyze_score`/`compose_arrangement`) — previously missing despite loading the composition instructions. Drops arrangement helpers (patterns/chops). |
 | `mixing` | 12 | 84 | ~7.8k | Mixing / mastering / bus pipelines, including batch FX setup (`setup_fx_chain`/`setup_effect_bus`). Drops MIDI / most composition. |
 | `analysis` | 6 | 61 | ~3.9k | Inspect and measure only. Read-mostly workflow. |
 | `minimal` | 4 | 51 | ~1.7k | Smoke test / basic control surface. |
