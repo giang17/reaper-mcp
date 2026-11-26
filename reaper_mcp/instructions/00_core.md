@@ -26,6 +26,10 @@ the first place.
 **ALWAYS use `wipe_all_midi()` to clear MIDI.** This is the ONLY correct way to wipe a project.
 - It deletes MIDI items (audio items are left untouched), clears markers/regions, and resets composition state in one call.
 - NEVER manually delete items with `item_delete`, `midi_delete_all_notes`, or loops of individual track operations.
+- To delete tracks, make ONE `track_delete_batch` call — `[{"all": true}]` for every track, `[{"track_index": 3}]` for one, `[{"track_indices": [0, 2, 5]}]` for several — never a loop of single deletes. It can't delete the master track. Confirm first on a project that already has content.
+
+## Undoing a mistake
+Every change you make is a named undo step, so a mistake can be taken back. `project_undo` reverses the last step, `project_undo(steps=3)` the last three. A tool that runs many commands (`engine_mix`, `chop_pipeline`...) leaves one step per command, labelled with the tool, and `project_undo_group` takes back everything that run did. Offer this when the user says a result sounds wrong, instead of rebuilding by hand.
 - NEVER use `edit_section` with empty tracks to "clear" — use `wipe_all_midi`.
 - For partial wipe: `wipe_all_midi(tracks="[0,1,2]")` — pass specific track indices.
 
@@ -131,14 +135,20 @@ Always call `fx_list_installed()` first. Returns:
   user wants to use modules inside a rack, they set it up manually.
 - `user_overrides`: explicit category→plugin mapping from their prefs file.
 
-**When calling `engine_mix` / `engine_master`**: the mix pipeline's built-in
-calibrated param profiles only cover FabFilter + REAPER stock. For Waves /
-iZotope / Valhalla etc., the pipeline adds them but uses fuzzy param-name
-matching (approximate — user should fine-tune in the plugin UI afterwards).
-Tell the user this.
+**When calling `engine_mix` / `engine_master`**: the pipeline only places
+plugins it has calibrated parameter maps for — FabFilter Pro-Q 3 / Pro-C 2 /
+Pro-R / Pro-L 2 and REAPER's own ReaEQ / ReaComp / ReaVerbate / ReaLimit —
+chosen per category. It does not place Waves / iZotope / Valhalla etc.; it
+uses the best supported plugin for that category instead. If the user wants
+another plugin, set it up yourself with `setup_fx_chain` and tell them its
+settings are approximate. The result's `plugin_families` shows what was used
+for each category.
 
 **User can lock in preferences** via `set_fx_preferences({"eq":"...","compressor":"..."})`.
-Stored in `%APPDATA%/reaper_mcp/fx_prefs.json`.
+Stored in `%APPDATA%/reaper_mcp/fx_prefs.json`. A preference applies to eq,
+compressor, reverb and limiter when the engine supports that plugin, and the
+response's `engine_support` says which it can use. If a mix or master result
+has `preferences_ignored`, tell the user which preference wasn't used and why.
 
 ## `engine_mix(style, clean=True)` — per-track EQ + compression + reverb buses
 Auto-detects FabFilter (Pro-Q 3 / Pro-C 2 / Pro-R) or falls back to REAPER stock
@@ -147,6 +157,21 @@ Auto-detects FabFilter (Pro-Q 3 / Pro-C 2 / Pro-R) or falls back to REAPER stock
 ## `engine_master(style, clean=True)` — mastering chain on master bus
 HP 25Hz → bus glue comp → tonal shelf EQ → stereo width → brick-wall limiter.
 Targets per-style LUFS and true-peak ceiling.
+
+## Master track and removing FX — `track_index=-1` / `fx_remove_batch`
+The master track is `track_index=-1` in every `fx_*` tool, `setup_fx_chain`
+and `configure_tracks` — so you can inspect the master chain with
+`fx_get_chain(-1)`, or build a mastering chain with parameters in one
+`setup_fx_chain` call instead of `engine_master`, which replaces the chain.
+To remove plugins, use `fx_remove_batch` — one call for one FX, several, or
+a whole chain, across as many tracks as you like. Entries are a JSON array:
+`{"track_index": -1, "all": true}` clears a chain, `{"track_index": 2,
+"fx_index": 3}` removes one, `{"track_index": 2, "fx_indices": [0, 3, 4]}`
+removes several. Indices refer to the chain as it is when the call starts,
+so entries can overlap or come in any order. Don't loop single removals. A
+bad track or index lands in the response's `errors` array without aborting
+the rest. It deletes plugins the user may have added themselves, so on an
+existing project confirm before clearing a chain.
 
 ## `setup_sidechain(source_track, target_track, amount, ...)` — kick→bass/pad pumping
 Creates aux send on channels 3/4, pin-maps compressor sidechain inputs, tunes the pump.

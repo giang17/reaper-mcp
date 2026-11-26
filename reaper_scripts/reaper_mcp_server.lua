@@ -671,6 +671,27 @@ local function sorted_name_pairs(t)
   end
 end
 
+-- Write plugin named-config values (state that isn't an automatable param,
+-- e.g. ReaEQ's per-band BANDENABLEDx) and report what REAPER reads back.
+-- The setter's return value is not trusted: ReaEQ returns false for
+-- BANDENABLEDx even when the write takes effect, so `ok` comes from the
+-- read-back alone.
+local function apply_named_config(tr, fx_idx, named_config)
+  local results = {}
+  if type(named_config) ~= "table" then return results end
+  if not (reaper.TrackFX_SetNamedConfigParm and reaper.TrackFX_GetNamedConfigParm) then
+    results[#results+1] = {error = "named_config requires REAPER 6.37+"}
+    return results
+  end
+  for key, val in sorted_name_pairs(named_config) do
+    local want = tostring(val)
+    reaper.TrackFX_SetNamedConfigParm(tr, fx_idx, tostring(key), want)
+    local _, got = reaper.TrackFX_GetNamedConfigParm(tr, fx_idx, tostring(key))
+    results[#results+1] = {key = key, requested = want, value = got, ok = (got == want)}
+  end
+  return results
+end
+
 local function build_fx_chain(tr)
   local count = reaper.TrackFX_GetCount(tr)
   local chain = {}
@@ -829,12 +850,64 @@ end
 -- Helper: get track safely
 -- ============================================================
 
+-- Index -1 is the master track. get_track resolves it, so any handler using
+-- get_track can act on the master if its Python side admits -1. Handlers
+-- where the master is meaningless or dangerous (delete, freeze, re-route,
+-- re-arm, overwrite state) use get_numbered_track below instead, so they
+-- keep refusing it here even if a Python guard is later loosened.
+local MASTER_TRACK_INDEX = -1
+
 local function get_track(params, key)
   local idx = params[key or "track_index"]
   if idx == nil then return nil, nil, "Missing parameter: " .. (key or "track_index") end
-  local tr = reaper.GetTrack(0, math.floor(idx))
+  local tr
+  if math.floor(idx) == MASTER_TRACK_INDEX then
+    tr = reaper.GetMasterTrack(0)
+  else
+    tr = reaper.GetTrack(0, math.floor(idx))
+  end
   if not tr then return nil, nil, "Track not found (index " .. idx .. ")" end
   return tr, math.floor(idx), nil
+end
+
+-- Same as get_track, but refuses the master track. For handlers that only
+-- make sense on a numbered track.
+local function get_numbered_track(params, key)
+  local idx = params[key or "track_index"]
+  if idx ~= nil and math.floor(idx) == MASTER_TRACK_INDEX then
+    return nil, nil, "The master track is not supported by this tool"
+  end
+  return get_track(params, key)
+end
+
+-- The batch tools (setup_fx_chain, configure_tracks) receive a raw numeric
+-- index per entry rather than a params table, so they cannot use get_track
+-- above. Same -1 -> master rule, deliberately applied only at those two
+-- entry points: batching a mastering chain onto the master bus in the same
+-- call as track FX is the whole point, but nothing else gains -1 access.
+local function batch_track_from_index(ti)
+  if ti == MASTER_TRACK_INDEX then return reaper.GetMasterTrack(0) end
+  return reaper.GetTrack(0, ti)
+end
+
+-- Resolve the index of an FX already on the chain, or say why it can't be.
+-- REAPER's TrackFX_* functions quietly do nothing for an index that doesn't
+-- exist, so a handler that skips this check reports success for an FX it
+-- never touched. Returns fx_index, or nil + an error message.
+local function get_fx_index(tr, params, key)
+  key = key or "fx_index"
+  local v = params[key]
+  if v == nil then return nil, "Missing required parameter: " .. key end
+  local n = tonumber(v)
+  if not n then
+    return nil, "Parameter '" .. key .. "' must be a number, got: " .. tostring(v)
+  end
+  local fi = math.floor(n)
+  local count = reaper.TrackFX_GetCount(tr)
+  if fi < 0 or fi >= count then
+    return nil, key .. " " .. fi .. " out of range (chain has " .. count .. ")"
+  end
+  return fi
 end
 
 -- ============================================================
@@ -948,13 +1021,79 @@ function track.track_create(p)
   return build_track_info(tr, idx)
 end
 
-function track.track_delete(p)
-  local tr, idx, err = get_track(p)
-  if not tr then return nil, err end
-  local _, name = reaper.GetTrackName(tr)
-  reaper.DeleteTrack(tr)
+-- Batch track deletion. Each entry: {all=true | track_index | track_indices}.
+-- Targets are resolved to tracks as they are when the call starts and only
+-- then deleted, highest index first, so an earlier delete can never shift a
+-- later one and entry order doesn't matter. Numbered tracks only: the master
+-- is refused per entry by get_numbered_track. Mirrors items_apply: a bad
+-- entry lands in errors[] and does not abort the rest.
+function track.track_delete_batch(p)
+  if not p.entries then return nil, "Missing parameter: entries" end
+  local entries = p.entries
+  if type(entries) == "string" then entries = json_decode(entries) end
+  if type(entries) ~= "table" then return nil, "Invalid entries JSON" end
+
+  local count = reaper.CountTracks(0)
+  local targets = {}  -- track_index -> MediaTrack
+  local errors = {}
+
+  local function add_error(n, ti, msg)
+    errors[#errors+1] = {index = n - 1, track_index = ti, error = msg}
+  end
+
+  local function resolve(n, ti)
+    local tr, _, err = get_numbered_track({track_index = ti})
+    if not tr then
+      add_error(n, ti, err)
+    else
+      targets[ti] = tr
+    end
+  end
+
+  for n, e in ipairs(entries) do
+    if type(e) ~= "table" then
+      add_error(n, nil, "Entry must be an object")
+    elseif e.all == true then
+      for i = 0, count - 1 do resolve(n, i) end
+    else
+      local list = e.track_indices
+      if list == nil and e.track_index ~= nil then list = {e.track_index} end
+      if type(list) ~= "table" then
+        add_error(n, nil, "Entry needs one of: all, track_index, track_indices")
+      else
+        for _, v in ipairs(list) do
+          if type(v) ~= "number" then
+            add_error(n, nil, "track index must be a number")
+          else
+            resolve(n, math.floor(v))
+          end
+        end
+      end
+    end
+  end
+
+  local order = {}
+  for ti in pairs(targets) do order[#order+1] = ti end
+  table.sort(order, function(a, b) return a > b end)
+
+  reaper.Undo_BeginBlock()
+  local deleted_tracks = {}
+  for _, ti in ipairs(order) do
+    local tr = targets[ti]
+    local _, name = reaper.GetTrackName(tr)
+    reaper.DeleteTrack(tr)
+    table.insert(deleted_tracks, 1, {track_index = ti, name = name or ""})
+  end
   reaper.UpdateArrange()
-  return {deleted_index = idx, deleted_name = name or "", remaining_tracks = reaper.CountTracks(0)}
+  reaper.Undo_EndBlock("MCP: track_delete_batch", -1)
+
+  return {
+    success = true,
+    deleted = #deleted_tracks,
+    deleted_tracks = deleted_tracks,
+    remaining_tracks = reaper.CountTracks(0),
+    errors = errors,
+  }
 end
 
 function track.track_rename(p)
@@ -998,7 +1137,7 @@ function track.track_set_solo(p)
 end
 
 function track.track_set_record_arm(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   reaper.SetMediaTrackInfo_Value(tr, "I_RECARM", p.arm and 1 or 0)
   return build_track_info(tr, idx)
@@ -1025,11 +1164,18 @@ function track.track_select(p)
   return build_track_info(tr, idx)
 end
 
+-- The tool's -1 means "MIDI, all inputs, all channels". REAPER reads a
+-- negative I_RECINPUT as "no input", so it is translated here: 4096 is the
+-- MIDI flag, bits 5-10 the device (63 = all), bits 0-4 the channel (0 = all).
+local RECINPUT_MIDI_ALL = 4096 + (63 << 5)
+
 function track.track_set_input(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   if p.input_index == nil then return nil, "Missing parameter: input_index" end
-  reaper.SetMediaTrackInfo_Value(tr, "I_RECINPUT", math.floor(p.input_index))
+  local input = math.floor(p.input_index)
+  if input == -1 then input = RECINPUT_MIDI_ALL end
+  reaper.SetMediaTrackInfo_Value(tr, "I_RECINPUT", input)
   return build_track_info(tr, idx)
 end
 
@@ -1053,7 +1199,7 @@ function track.track_get_mixer_state(p)
 end
 
 function track.track_set_folder(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   if p.folder_depth == nil then return nil, "Missing parameter: folder_depth" end
   reaper.SetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH", math.floor(p.folder_depth))
@@ -1265,20 +1411,75 @@ function project.project_export_audio(p)
   }
 end
 
+local MAX_UNDO_STEPS = 100
+
+-- Undo `steps` steps (default 1), most recent first, stopping early if the
+-- undo history runs out. `undone` is the most recent step, as before.
 function project.project_undo(p)
-  local action = reaper.Undo_CanUndo2(0) or ""
-  reaper.Main_OnCommand(40029, 0)
-  local next_undo = reaper.Undo_CanUndo2(0) or ""
-  local next_redo = reaper.Undo_CanRedo2(0) or ""
-  return {undone = action, next_undo = next_undo, next_redo = next_redo}
+  local steps = math.floor(tonumber(p.steps) or 1)
+  if steps < 1 or steps > MAX_UNDO_STEPS then
+    return nil, "steps must be between 1 and " .. MAX_UNDO_STEPS
+  end
+  local undone = {}
+  for _ = 1, steps do
+    local name = reaper.Undo_CanUndo2(0) or ""
+    if name == "" then break end
+    reaper.Main_OnCommand(40029, 0)
+    undone[#undone + 1] = name
+  end
+  return {
+    undone = undone[1] or "",
+    undone_steps = undone,
+    steps_undone = #undone,
+    next_undo = reaper.Undo_CanUndo2(0) or "",
+    next_redo = reaper.Undo_CanRedo2(0) or "",
+  }
 end
 
 function project.project_redo(p)
-  local action = reaper.Undo_CanRedo2(0) or ""
-  reaper.Main_OnCommand(40030, 0)
-  local next_undo = reaper.Undo_CanUndo2(0) or ""
-  local next_redo = reaper.Undo_CanRedo2(0) or ""
-  return {redone = action, next_undo = next_undo, next_redo = next_redo}
+  local steps = math.floor(tonumber(p.steps) or 1)
+  if steps < 1 or steps > MAX_UNDO_STEPS then
+    return nil, "steps must be between 1 and " .. MAX_UNDO_STEPS
+  end
+  local redone = {}
+  for _ = 1, steps do
+    local name = reaper.Undo_CanRedo2(0) or ""
+    if name == "" then break end
+    reaper.Main_OnCommand(40030, 0)
+    redone[#redone + 1] = name
+  end
+  return {
+    redone = redone[1] or "",
+    redone_steps = redone,
+    steps_redone = #redone,
+    next_undo = reaper.Undo_CanUndo2(0) or "",
+    next_redo = reaper.Undo_CanRedo2(0) or "",
+  }
+end
+
+-- Undo every step of the most recent multi-command tool run. Its steps are
+-- named "MCP: <tool>#<run> > <command>"; this undoes consecutive steps from
+-- the top of the history while they carry that same tool and run number.
+function project.project_undo_group(p)
+  local top = reaper.Undo_CanUndo2(0) or ""
+  local prefix = top:match("^(MCP: .-#%d+ > )")
+  if not prefix then
+    return nil, "The last undo step was not made by a multi-command tool. Use project_undo instead."
+  end
+  local undone = {}
+  while #undone < MAX_UNDO_STEPS do
+    local name = reaper.Undo_CanUndo2(0) or ""
+    if name:sub(1, #prefix) ~= prefix then break end
+    reaper.Main_OnCommand(40029, 0)
+    undone[#undone + 1] = name
+  end
+  return {
+    group = prefix:match("^MCP: (.-)#"),
+    undone_steps = undone,
+    steps_undone = #undone,
+    next_undo = reaper.Undo_CanUndo2(0) or "",
+    next_redo = reaper.Undo_CanRedo2(0) or "",
+  }
 end
 
 function project.project_get_notes(p)
@@ -1442,12 +1643,77 @@ function fx.fx_add(p)
   return build_fx_chain(tr)
 end
 
-function fx.fx_remove(p)
-  local tr, idx, err = get_track(p)
-  if not tr then return nil, err end
-  if not p.fx_index then return nil, "Missing parameter: fx_index" end
-  reaper.TrackFX_Delete(tr, math.floor(p.fx_index))
-  return build_fx_chain(tr)
+-- Batch FX removal. Each entry: {track_index, all=true | fx_index | fx_indices}.
+-- Targets are resolved against each chain as it is when the call starts and
+-- only then deleted (highest index first), so entry order and overlapping
+-- entries can never shift an index mid-batch. Mirrors items_apply: a bad
+-- entry lands in errors[] and does not abort the rest.
+function fx.fx_remove_batch(p)
+  if not p.entries then return nil, "Missing parameter: entries" end
+  local entries = json_decode(p.entries)
+  if type(entries) ~= "table" then return nil, "Invalid entries JSON" end
+
+  local per_track = {}  -- track_index -> {tr, count, targets = {fx_index = true}}
+  local errors = {}
+
+  local function add_error(n, ti, fi, msg)
+    errors[#errors+1] = {index = n and (n - 1) or nil, track_index = ti, fx_index = fi, error = msg}
+  end
+
+  for n, e in ipairs(entries) do
+    local tr, ti, err = get_track(e)
+    if not tr then
+      add_error(n, e.track_index, nil, err)
+    else
+      local slot = per_track[ti]
+      if not slot then
+        slot = {tr = tr, count = reaper.TrackFX_GetCount(tr), targets = {}}
+        per_track[ti] = slot
+      end
+      if e.all == true then
+        for i = 0, slot.count - 1 do slot.targets[i] = true end
+      else
+        local list = e.fx_indices
+        if list == nil and e.fx_index ~= nil then list = {e.fx_index} end
+        if type(list) ~= "table" then
+          add_error(n, ti, nil, "Entry needs one of: all, fx_index, fx_indices")
+        else
+          for _, v in ipairs(list) do
+            if type(v) ~= "number" then
+              add_error(n, ti, nil, "fx index must be a number")
+            else
+              local fi = math.floor(v)
+              if fi >= 0 and fi < slot.count then
+                slot.targets[fi] = true
+              else
+                add_error(n, ti, fi, "fx_index out of range (chain has " .. slot.count .. ")")
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  reaper.Undo_BeginBlock()
+  local removed = 0
+  local tracks_out = {}
+  for ti, slot in pairs(per_track) do
+    local order = {}
+    for fi in pairs(slot.targets) do order[#order+1] = fi end
+    table.sort(order, function(a, b) return a > b end)
+    for _, fi in ipairs(order) do
+      if reaper.TrackFX_Delete(slot.tr, fi) then
+        removed = removed + 1
+      else
+        add_error(nil, ti, fi, "TrackFX_Delete failed")
+      end
+    end
+    tracks_out[#tracks_out+1] = {track_index = ti, fx_count = reaper.TrackFX_GetCount(slot.tr)}
+  end
+  table.sort(tracks_out, function(a, b) return a.track_index < b.track_index end)
+  reaper.Undo_EndBlock("MCP: fx_remove_batch", -1)
+  return {success = true, removed = removed, tracks = tracks_out, errors = errors}
 end
 
 function fx.fx_get_chain(p)
@@ -1459,14 +1725,16 @@ end
 function fx.fx_get_params(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  if not p.fx_index then return nil, "Missing parameter: fx_index" end
-  return build_fx_params(tr, math.floor(p.fx_index), p.max_results)
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
+  return build_fx_params(tr, fi, p.max_results)
 end
 
 function fx.fx_set_param(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   local pi = require_int(p, "param_index")
   local val_in = require_num(p, "value")
   reaper.TrackFX_SetParam(tr, fi, pi, val_in)
@@ -1480,7 +1748,8 @@ end
 function fx.fx_set_param_by_name(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   if p.param_name == nil then return nil, "Missing parameter: param_name" end
   if p.value == nil then return nil, "Missing parameter: value" end
   local num = reaper.TrackFX_GetNumParams(tr, fi)
@@ -1503,8 +1772,8 @@ end
 function fx.fx_scan_params(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  if not p.fx_index then return nil, "Missing parameter: fx_index" end
-  local fi = math.floor(p.fx_index)
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   local max_params = p.max_params or 200
 
   local num = reaper.TrackFX_GetNumParams(tr, fi)
@@ -1539,7 +1808,14 @@ function fx.fx_scan_params(p)
     local skip = (pname == "-" and orig_val == 0) or is_midi_cc
     if not skip then
       local points
-      local step_count = reaper.TrackFX_GetParameterStepCount(tr, fi, i)
+      -- TrackFX_GetParameterStepCount isn't a real REAPER API function on
+      -- some installs (confirmed live: calling it throws "attempt to call
+      -- a nil value") — guard the call itself so a missing function falls
+      -- through to the existing continuous-sweep path below instead of
+      -- crashing the whole scan.
+      local step_count = reaper.TrackFX_GetParameterStepCount
+          and reaper.TrackFX_GetParameterStepCount(tr, fi, i)
+          or nil
       if step_count and step_count > 0 and step_count <= MAX_STEP_SAMPLES then
         points = {}
         for s = 0, step_count do
@@ -1567,7 +1843,8 @@ end
 function fx.fx_enable(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   reaper.TrackFX_SetEnabled(tr, fi, true)
   return build_fx_chain(tr)
 end
@@ -1575,7 +1852,8 @@ end
 function fx.fx_disable(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   reaper.TrackFX_SetEnabled(tr, fi, false)
   return build_fx_chain(tr)
 end
@@ -1583,7 +1861,8 @@ end
 function fx.fx_show_ui(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   reaper.TrackFX_Show(tr, fi, 1)
   return build_fx_info(tr, fi)
 end
@@ -1591,7 +1870,8 @@ end
 function fx.fx_get_preset(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   local _, preset = reaper.TrackFX_GetPreset(tr, fi, "")
   local _, fx_name = reaper.TrackFX_GetFXName(tr, fi, "")
   local pi, total_presets = reaper.TrackFX_GetPresetIndex(tr, fi)
@@ -1609,7 +1889,8 @@ function fx.fx_set_preset(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
   if not p.preset_name then return nil, "Missing parameter: preset_name" end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   local requested = tostring(p.preset_name)
 
   local applied = reaper.TrackFX_SetPreset(tr, fi, requested)
@@ -1649,7 +1930,8 @@ end
 function fx.fx_navigate_preset(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   local dir = require_int(p, "direction")
   reaper.TrackFX_NavigatePresets(tr, fi, dir)
   local _, preset = reaper.TrackFX_GetPreset(tr, fi, "")
@@ -1696,8 +1978,10 @@ end
 function fx.fx_move(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
-  local ni = require_int(p, "new_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
+  local ni, nerr = get_fx_index(tr, p, "new_index")
+  if not ni then return nil, nerr end
   reaper.TrackFX_CopyToTrack(tr, fi, tr, ni, true)
   return build_fx_chain(tr)
 end
@@ -1708,7 +1992,8 @@ end
 function fx.fx_rename(p)
   local tr, idx, err = get_track(p)
   if not tr then return nil, err end
-  local fi = require_int(p, "fx_index")
+  local fi, ferr = get_fx_index(tr, p)
+  if not fi then return nil, ferr end
   if p.new_name == nil then return nil, "Missing parameter: new_name" end
   local new_name = tostring(p.new_name)
   if #new_name > 1000 then return nil, "new_name exceeds 1000 characters" end
@@ -1960,16 +2245,68 @@ function item.item_insert_media(p)
   if not p.path then return nil, "Missing parameter: path" end
   local pos = p.position or 0
   if pos < 0 then pos = 0 end
-  reaper.SetEditCurPos(pos, false, false)
-  reaper.SetOnlyTrackSelected(tr)
-  reaper.InsertMedia(p.path, 0)
-  reaper.UpdateArrange()
-  local n = reaper.CountTrackMediaItems(tr)
-  if n > 0 then
-    local it = reaper.GetTrackMediaItem(tr, n - 1)
-    return build_item_info(it, reaper.CountMediaItems(0) - 1)
+  -- Optional tempo match, applied in this same call (load_loops). Checked
+  -- before inserting so a bad value can't leave a half-done insert behind.
+  local rate = nil
+  if p.playrate ~= nil then
+    rate = tonumber(p.playrate)
+    if not rate or rate <= 0 then return nil, "playrate must be > 0" end
   end
-  return nil, "Media insert failed"
+  -- Build the item straight from the file, the same way
+  -- chops_create_virtual_slice does, rather than through InsertMedia.
+  -- InsertMedia runs REAPER's import routine, which can stop on a prompt
+  -- in REAPER ("Media contains embedded tempo information, import as:" for
+  -- ACID-tagged sample-pack loops) that blocks this script until someone
+  -- answers it - confirmed live, every load timed out - and whose answer
+  -- can stretch the item on its own, on top of the playrate set below.
+  local src = reaper.PCM_Source_CreateFromFile(p.path)
+  if not src then return nil, "Could not open media file: " .. tostring(p.path) end
+  local src_len, is_qn = reaper.GetMediaSourceLength(src)
+  local len = src_len or 0
+  if is_qn then
+    -- MIDI file sources report length in quarter notes.
+    local start_qn = reaper.TimeMap2_timeToQN(0, pos)
+    len = reaper.TimeMap2_QNToTime(0, start_qn + src_len) - pos
+  end
+  if len <= 0 then
+    reaper.PCM_Source_Destroy(src)
+    return nil, "Media file has no readable audio: " .. tostring(p.path)
+  end
+  local it = reaper.AddMediaItemToTrack(tr)
+  if not it then
+    reaper.PCM_Source_Destroy(src)
+    return nil, "Media insert failed"
+  end
+  local new_take = reaper.AddTakeToMediaItem(it)
+  if not new_take then
+    reaper.DeleteTrackMediaItem(tr, it)
+    reaper.PCM_Source_Destroy(src)
+    return nil, "Media insert failed"
+  end
+  reaper.SetMediaItemTake_Source(new_take, src)
+  reaper.GetSetMediaItemTakeInfo_String(new_take, "P_NAME", basename(p.path), true)
+  reaper.SetMediaItemInfo_Value(it, "D_POSITION", pos)
+  reaper.SetMediaItemInfo_Value(it, "D_LENGTH", len)
+  reaper.UpdateArrange()
+  -- Changing a take's playrate doesn't resize its item, so the length is
+  -- divided by the rate to keep the whole source audible. Pitch is kept
+  -- unless the caller asks for a vinyl-style speed change.
+  if rate then
+    local take = reaper.GetActiveTake(it)
+    if take then
+      reaper.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
+      reaper.SetMediaItemTakeInfo_Value(take, "B_PPITCH", p.preserve_pitch == false and 0 or 1)
+      local len = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
+      reaper.SetMediaItemInfo_Value(it, "D_LENGTH", len / rate)
+    end
+  end
+  -- Resolve the real index after the insert, same reasoning as
+  -- item_duplicate: GetMediaItem() enumerates by track then position.
+  local new_idx = -1
+  for i = 0, reaper.CountMediaItems(0) - 1 do
+    if reaper.GetMediaItem(0, i) == it then new_idx = i; break end
+  end
+  return build_item_info(it, new_idx)
 end
 
 function item.item_create_midi(p)
@@ -2092,7 +2429,26 @@ function item.item_split_at_transients(p)
   reaper.Main_OnCommand(40289, 0)  -- Item: Unselect all items
   reaper.SetMediaItemSelected(it, true)
   local count_before = reaper.CountMediaItems(0)
-  reaper.Main_OnCommand(40310, 0)  -- Item: Split items at transients
+
+  -- REAPER has no "split at transients" main action, so walk the item's
+  -- transients with "Item navigation: Move cursor to next transient in
+  -- items" (40375) and split at each. Split right-to-left so `it` stays the
+  -- left part containing every remaining position.
+  local saved_cursor = reaper.GetCursorPosition()
+  reaper.SetEditCurPos(orig_pos, false, false)
+  local positions = {}
+  local last = orig_pos
+  for _ = 1, 10000 do
+    reaper.Main_OnCommand(40375, 0)
+    local pos = reaper.GetCursorPosition()
+    if pos <= last + 1e-6 or pos >= orig_end - 1e-6 then break end
+    positions[#positions+1] = pos
+    last = pos
+  end
+  reaper.SetEditCurPos(saved_cursor, false, false)
+  for i = #positions, 1, -1 do
+    reaper.SplitMediaItem(it, positions[i])
+  end
   local count_after = reaper.CountMediaItems(0)
   reaper.PreventUIRefresh(-1)
   reaper.UpdateArrange()
@@ -2275,7 +2631,7 @@ function item.take_set_reversed(p)
   reaper.PreventUIRefresh(1)
   reaper.Main_OnCommand(40289, 0)  -- Unselect all items
   reaper.SetMediaItemSelected(it, true)
-  reaper.Main_OnCommand(41051, 0)  -- Item: Reverse items as new take
+  reaper.Main_OnCommand(40270, 0)  -- Item: Reverse items to new take
   reaper.PreventUIRefresh(-1)
   reaper.UpdateArrange()
   reaper.Undo_EndBlock("MCP: take_set_reversed", -1)
@@ -3901,7 +4257,7 @@ function compose.configure_tracks(p)
 
   for _, entry in ipairs(tracks_data) do
     local ti = math.floor(entry.track_index)
-    local tr = reaper.GetTrack(0, ti)
+    local tr = batch_track_from_index(ti)
     if not tr then
       reaper.Undo_EndBlock("configure_tracks", -1)
       return nil, "Track not found: " .. ti
@@ -4041,7 +4397,7 @@ function compose.setup_fx_chain(p)
 
   for _, entry in ipairs(data) do
     local ti = math.floor(entry.track_index)
-    local tr = reaper.GetTrack(0, ti)
+    local tr = batch_track_from_index(ti)
     if not tr then
       -- Real, confirmed robustness gap this closes: a single bad
       -- track_index used to abort the ENTIRE batch (hard return, no
@@ -4099,6 +4455,7 @@ function compose.setup_fx_chain(p)
         end
 
         local params_set = {}
+        local named_config_set = apply_named_config(tr, fx_idx, fx_entry.named_config)
 
         -- Set params by name (fuzzy match)
         if fx_entry.params then
@@ -4174,6 +4531,7 @@ function compose.setup_fx_chain(p)
           name = fx_entry.name,
           fx_index = fx_idx,
           params_set = params_set,
+          named_config_set = named_config_set,
           preset = fx_entry.preset,
         }
 
@@ -4333,37 +4691,15 @@ function compose.setup_master_chain(p)
   local ok, cleared_or_err, fx_results = pcall(function()
     local cleared = 0
     if p.clean then
-      local clear_names = p.clean_names
-      if type(clear_names) == "string" then clear_names = json_decode(clear_names) end
-      clear_names = clear_names or {"ReaEQ", "ReaComp", "ReaLimit",
-                                     "FabFilter Pro-Q 3", "FabFilter Pro-C 2",
-                                     "FabFilter Pro-L", "FabFilter Pro-L 2"}
-      -- First pass: remove any FX tagged by the mix engine with the
-      -- "[MIX] " prefix. Safe — we know we added these.
+      -- Remove only FX the mix engine tagged with the "[MIX] " prefix. No
+      -- name-matching fallback: it used to delete a user's own FabFilter /
+      -- Rea* master chain whenever no tagged FX were present.
       local num_fx = reaper.TrackFX_GetCount(master)
-      local any_tagged = false
       for fi = num_fx - 1, 0, -1 do
         local _, fn = reaper.TrackFX_GetFXName(master, fi, "")
         if fn:sub(1, 6) == "[MIX] " then
           reaper.TrackFX_Delete(master, fi)
           cleared = cleared + 1
-          any_tagged = true
-        end
-      end
-      -- Fallback — only if we found NO tagged FX, fall back to name-substring
-      -- matching for backward compat with projects from before the prefix
-      -- system. New projects rely on the tagged pass above exclusively.
-      if not any_tagged then
-        num_fx = reaper.TrackFX_GetCount(master)
-        for fi = num_fx - 1, 0, -1 do
-          local _, fn = reaper.TrackFX_GetFXName(master, fi, "")
-          for _, cname in ipairs(clear_names) do
-            if fn:find(cname, 1, true) then
-              reaper.TrackFX_Delete(master, fi)
-              cleared = cleared + 1
-              break
-            end
-          end
         end
       end
     end
@@ -4380,6 +4716,8 @@ function compose.setup_master_chain(p)
             results[#results+1] = {name = fx_entry.name, error = "Plugin not installed or name mismatch — check spelling / install plugin"}
             goto next_master_fx
           end
+
+          local named_config_set = apply_named_config(master, fx_idx, fx_entry.named_config)
 
           -- Set params by name (fuzzy)
           if fx_entry.params then
@@ -4417,7 +4755,8 @@ function compose.setup_master_chain(p)
             reaper.TrackFX_SetNamedConfigParm(master, fx_idx, "renamed_name", tostring(fx_entry.renamed_name))
           end
 
-          results[#results+1] = {name = fx_entry.name, fx_index = fx_idx}
+          results[#results+1] = {name = fx_entry.name, fx_index = fx_idx,
+                                 named_config_set = named_config_set}
           ::next_master_fx::
         end
       end
@@ -4813,9 +5152,48 @@ end
 
 local envelope = {}
 
+-- Action names verified with kbd_getTextFromCmd on REAPER 7.x.
+local ENVELOPE_CREATE_ACTIONS = {
+  ["Volume"] = 40406,           -- Track: Toggle track volume envelope visible
+  ["Pan"] = 40407,              -- Track: Toggle track pan envelope visible
+  ["Mute"] = 40867,             -- Track: Toggle track mute envelope visible
+  ["Volume (Pre-FX)"] = 40408,  -- Track: Toggle track pre-FX volume envelope visible
+  ["Pan (Pre-FX)"] = 40409,     -- Track: Toggle track pre-FX pan envelope visible
+  ["Width"] = 41870,            -- Track: Select width envelope
+  ["Width (Pre-FX)"] = 41869,   -- Track: Select pre-FX width envelope
+}
+
+-- The create actions work on selected tracks and move the fader's current
+-- value into a seed point while resetting the fader (measured: a -7 dB fader
+-- jumps to 0 dB with a point at t=0 holding -7 dB). Undo all of that so the
+-- track sounds the same and only the caller's points end up in the envelope.
+local function _create_track_envelope(tr, name, cmd)
+  local selected = {}
+  for i = 0, reaper.CountSelectedTracks(0) - 1 do
+    selected[#selected+1] = reaper.GetSelectedTrack(0, i)
+  end
+  local vol = reaper.GetMediaTrackInfo_Value(tr, "D_VOL")
+  local pan = reaper.GetMediaTrackInfo_Value(tr, "D_PAN")
+  local width = reaper.GetMediaTrackInfo_Value(tr, "D_WIDTH")
+
+  reaper.SetOnlyTrackSelected(tr)
+  reaper.Main_OnCommand(cmd, 0)
+  local env = reaper.GetTrackEnvelopeByName(tr, name)
+  if env then
+    reaper.DeleteEnvelopePointRange(env, -1, 1e12)
+  end
+
+  reaper.SetMediaTrackInfo_Value(tr, "D_VOL", vol)
+  reaper.SetMediaTrackInfo_Value(tr, "D_PAN", pan)
+  reaper.SetMediaTrackInfo_Value(tr, "D_WIDTH", width)
+  reaper.SetTrackSelected(tr, false)
+  for _, t in ipairs(selected) do reaper.SetTrackSelected(t, true) end
+  return env
+end
+
 local function _resolve_envelope(p)
-  local tr = reaper.GetTrack(0, math.floor(p.track_index or -1))
-  if not tr then return nil, "Track not found" end
+  local tr, tidx, terr = get_track(p)
+  if not tr then return nil, terr end
   local fx_index = p.fx_index
   local param_index = p.param_index
   if fx_index ~= nil and param_index ~= nil then
@@ -4835,18 +5213,54 @@ local function _resolve_envelope(p)
   local name = p.envelope_name or "Volume"
   local env = reaper.GetTrackEnvelopeByName(tr, name)
   if not env and p.create then
-    -- REAPER creates volume/pan envelopes via Main_OnCommand on selected track
-    reaper.SetOnlyTrackSelected(tr)
-    if name == "Volume" then reaper.Main_OnCommand(40406, 0)  -- Track: Toggle volume envelope
-    elseif name == "Pan" then reaper.Main_OnCommand(40407, 0)
-    elseif name == "Mute" then reaper.Main_OnCommand(40867, 0)
+    local cmd = ENVELOPE_CREATE_ACTIONS[name]
+    if not cmd then
+      return nil, "Track envelope '" .. name .. "' can't be created by this tool."
     end
-    env = reaper.GetTrackEnvelopeByName(tr, name)
+    env = _create_track_envelope(tr, name, cmd)
+    if not env then
+      -- Measured live: the mute-envelope action does nothing on the master.
+      if tidx == MASTER_TRACK_INDEX then
+        return nil, "Track envelope '" .. name .. "' could not be created on the master track. "
+                    .. "To silence the master, automate its Volume envelope instead."
+      end
+      return nil, "Track envelope '" .. name .. "' could not be created."
+    end
+    return env, nil, true
   end
   if not env then
     return nil, "Track envelope '" .. name .. "' not found. Pass create=true to create it."
   end
   return env, nil
+end
+
+-- Pan envelopes store pan negated (+1 = hard left), unlike D_PAN and this
+-- tool's documented -1 = left. Measured: creating a Pan envelope on a track
+-- panned -0.5 seeds the envelope with +0.5.
+local function _is_track_pan_envelope(p)
+  if p.fx_index ~= nil and p.param_index ~= nil then return false end
+  local name = p.envelope_name or "Volume"
+  return name == "Pan" or name == "Pan (Pre-FX)"
+end
+
+-- Envelope points are stored in the envelope's own scaling mode (Volume
+-- envelopes use fader scaling, where 0 dB is ~716, not 1.0). Convert so the
+-- tool reads and writes its documented units in every mode; mode 0 is a
+-- no-op, so pan/width/mute/FX-param envelopes are unaffected.
+local function _env_value_to_reaper(env, p, v)
+  if _is_track_pan_envelope(p) then v = -v end
+  if reaper.GetEnvelopeScalingMode and reaper.ScaleToEnvelopeMode then
+    v = reaper.ScaleToEnvelopeMode(reaper.GetEnvelopeScalingMode(env), v)
+  end
+  return v
+end
+
+local function _env_value_from_reaper(env, p, v)
+  if reaper.GetEnvelopeScalingMode and reaper.ScaleFromEnvelopeMode then
+    v = reaper.ScaleFromEnvelopeMode(reaper.GetEnvelopeScalingMode(env), v)
+  end
+  if _is_track_pan_envelope(p) then v = -v end
+  return v
 end
 
 function envelope.envelope_get_points(p)
@@ -4859,7 +5273,7 @@ function envelope.envelope_get_points(p)
   for i = 0, returned - 1 do
     local _, time, value, shape, tension, selected = reaper.GetEnvelopePoint(env, i)
     points[#points+1] = {
-      index = i, time = time, value = value,
+      index = i, time = time, value = _env_value_from_reaper(env, p, value),
       shape = shape, tension = tension, selected = selected,
     }
   end
@@ -4872,16 +5286,18 @@ function envelope.envelope_get_points(p)
 end
 
 function envelope.envelope_add_points(p)
-  local env, err = _resolve_envelope(p)
+  local env, err, created = _resolve_envelope(p)
   if not env then return nil, err end
   local pts = p.points
   if type(pts) == "string" then pts = json_decode(pts) end
   if type(pts) ~= "table" then return nil, "points must be a JSON array" end
   local added = 0
+  local first_time = nil
   for _, pt in ipairs(pts) do
     if type(pt.time) == "number" and type(pt.value) == "number" then
+      if first_time == nil or pt.time < first_time then first_time = pt.time end
       reaper.InsertEnvelopePoint(
-        env, pt.time, pt.value,
+        env, pt.time, _env_value_to_reaper(env, p, pt.value),
         math.floor(pt.shape or 0),
         pt.tension or 0,
         pt.selected and true or false,
@@ -4890,7 +5306,14 @@ function envelope.envelope_add_points(p)
       added = added + 1
     end
   end
+  -- REAPER gives a new, empty envelope a default point at t=0 (measured:
+  -- neutral value), which would ramp into the caller's first point. On an
+  -- envelope this call created, nothing before the caller's first point is
+  -- theirs.
   reaper.Envelope_SortPoints(env)
+  if created and first_time and first_time > 0 then
+    reaper.DeleteEnvelopePointRange(env, -1, first_time - 1e-6)
+  end
   reaper.UpdateArrange()
   return {success = true, points_added = added}
 end
@@ -4987,7 +5410,7 @@ function track.track_get_peak(p)
 end
 
 function track.track_freeze(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   reaper.SetOnlyTrackSelected(tr)
   -- 41223 = Track: Freeze to stereo (render pre-fader) — the common choice
@@ -4996,7 +5419,7 @@ function track.track_freeze(p)
 end
 
 function track.track_unfreeze(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   reaper.SetOnlyTrackSelected(tr)
   -- 41644 = Track: Unfreeze tracks
@@ -5132,14 +5555,14 @@ end
 
 function project.project_set_ripple_mode(p)
   local mode = math.floor(tonumber(p.mode or 0) or 0)
-  -- 0 = off, 1 = per-track, 2 = all tracks
-  reaper.GetSetRepeatEx(0, 0)  -- (unrelated, but we'll use Main_OnCommand)
+  -- 0 = off, 1 = per-track, 2 = all tracks. IDs verified with
+  -- kbd_getTextFromCmd: 40312 is "Item: Remove selected area of items".
   if mode == 0 then
-    reaper.Main_OnCommand(40310, 0)  -- Options: Set ripple editing off (ensures we start from known state)
+    reaper.Main_OnCommand(40309, 0)  -- Set ripple editing off
   elseif mode == 1 then
-    reaper.Main_OnCommand(40311, 0)  -- Options: Set ripple editing per-track
+    reaper.Main_OnCommand(40310, 0)  -- Set ripple editing per-track
   elseif mode == 2 then
-    reaper.Main_OnCommand(40312, 0)  -- Options: Set ripple editing all tracks
+    reaper.Main_OnCommand(40311, 0)  -- Set ripple editing all tracks
   else
     return nil, "mode must be 0 (off), 1 (per-track), or 2 (all tracks)"
   end
@@ -5174,7 +5597,7 @@ local function reguid_track_chunk(chunk)
 end
 
 function track.track_set_state_chunk(p)
-  local tr, idx, err = get_track(p)
+  local tr, idx, err = get_numbered_track(p)
   if not tr then return nil, err end
   if type(p.chunk) ~= "string" or p.chunk == "" then
     return nil, "chunk must be a non-empty string"
@@ -5323,8 +5746,388 @@ for k, v in pairs(tempo) do handlers[k] = v end
 for k, v in pairs(script) do handlers[k] = v end
 
 -- ============================================================
+-- UI-refresh / undo-block safety net
+-- ============================================================
+
+-- Handlers open PreventUIRefresh(1) and undo blocks and close them on their
+-- last lines. If one throws in between (a malformed entry is enough), the
+-- pcall in process_command catches the error but the closing calls never
+-- run: REAPER's UI would stay frozen and the undo block open. This wraps
+-- the three calls to count every open/close, and returns an unwind function
+-- that closes whatever a command left open. The wrapper only counts and
+-- passes every argument and return value straight through. ReaScript gives
+-- each script its own Lua state, so this touches no other script.
+local function install_block_guard(api)
+  local state = {
+    ui_depth = 0, undo_open = 0, committed = false, run = nil, run_seq = 0,
+    suppress = false, last_description = nil,
+  }
+  local real_prevent = api.PreventUIRefresh
+  local real_begin = api.Undo_BeginBlock
+  local real_end = api.Undo_EndBlock
+
+  -- While a multi-command tool is running (see group below), each undo step
+  -- it makes is named "MCP: <tool>#<run> > <command>", so its steps can be
+  -- told apart from anything else and undone together or one by one.
+  local function label(description)
+    if not state.run then return description end
+    local body = tostring(description or ""):gsub("^MCP: ", "")
+    return "MCP: " .. state.run.name .. "#" .. state.run.id .. " > " .. body
+  end
+
+  api.PreventUIRefresh = function(n)
+    state.ui_depth = state.ui_depth + n
+    return real_prevent(n)
+  end
+
+  -- REAPER's undo blocks (BeginBlock/EndBlock) do not capture changes to
+  -- MIDI items, notes and takes when called from this bridge: the step they
+  -- leave is empty or missing, so undoing it restores nothing. Commands whose
+  -- step the dispatcher records itself (see UNDO_POINT_COMMANDS) therefore run
+  -- with `suppress` set: their blocks stay out of REAPER, and the step name a
+  -- handler asked for is kept so the dispatcher can use it.
+  api.Undo_BeginBlock = function()
+    state.undo_open = state.undo_open + 1
+    if state.suppress then return end
+    return real_begin()
+  end
+  api.Undo_EndBlock = function(description, flags)
+    -- Handlers also close early on error paths, so never go below zero.
+    if state.undo_open > 0 then state.undo_open = state.undo_open - 1 end
+    if state.suppress then
+      state.last_description = description
+      return
+    end
+    state.committed = true
+    return real_end(label(description), flags)
+  end
+
+  -- Close anything the last command left open. Returns how much it closed,
+  -- and whether the command ended an undo block (its own, or one closed
+  -- here) so the dispatcher knows an undo point already exists for it.
+  local function unwind()
+    local unwound = {ui = 0, undo = 0, committed = false}
+    if state.ui_depth > 0 then
+      unwound.ui = state.ui_depth
+      real_prevent(-state.ui_depth)
+    end
+    while state.undo_open > 0 do
+      -- Ending the block (rather than discarding it) records the partial
+      -- work as one undo point, so the user can still undo it. A recorded
+      -- command's blocks never reached REAPER, so there is nothing to close.
+      if not state.suppress then
+        real_end(label("MCP: aborted (unbalanced undo block)"), -1)
+        unwound.undo = unwound.undo + 1
+      end
+      state.undo_open = state.undo_open - 1
+    end
+    unwound.committed = state.committed or unwound.undo > 0
+    state.ui_depth = 0
+    state.undo_open = 0
+    state.committed = false
+    return unwound
+  end
+
+  -- Undo groups. A tool that runs several commands opens a group, and every
+  -- undo step made while it is open is labelled with the tool and a run
+  -- number. Nothing is held open in REAPER: each command still records its
+  -- own step, so any number of them can be undone (project_undo steps=N), or
+  -- the whole run at once (project_undo_group). Groups nest: an inner tool
+  -- joins the outer run.
+  local group = {}
+
+  -- Returns the run number.
+  function group.begin(name, now)
+    if state.run then
+      state.run.depth = state.run.depth + 1
+    else
+      state.run_seq = state.run_seq + 1
+      state.run = {name = name, id = state.run_seq, depth = 1}
+    end
+    state.run.touched = now or 0
+    return state.run.id
+  end
+
+  -- Returns true only when this call closed the outermost group.
+  function group.finish()
+    if not state.run then return false end
+    state.run.depth = state.run.depth - 1
+    if state.run.depth > 0 then return false end
+    state.run = nil
+    return true
+  end
+
+  function group.is_open() return state.run ~= nil end
+
+  function group.label(description) return label(description) end
+
+  function group.touch(now)
+    if state.run then state.run.touched = now end
+  end
+
+  -- Failsafe: if the caller never closes its group (the Python process
+  -- died), stop labelling after `idle` seconds without a command, so
+  -- unrelated steps don't get attributed to a run that ended long ago.
+  -- Returns the name of the group it dropped, or nil.
+  function group.expire(now, idle)
+    if state.run and now - state.run.touched > idle then
+      local name = state.run.name
+      state.run = nil
+      return name
+    end
+    return nil
+  end
+
+  -- Per-command controls, used by the dispatcher around each command.
+  local commands = {}
+
+  -- Start a command. `suppress` is true for a command whose undo step the
+  -- dispatcher records itself; its own blocks then stay out of REAPER.
+  function commands.enter(suppress)
+    state.suppress = suppress and true or false
+    state.last_description = nil
+  end
+
+  -- The step name the last block in this command asked for, or nil.
+  function commands.description() return state.last_description end
+
+  return unwind, group, commands
+end
+
+local unwind_open_blocks, undo_group, undo_commands = install_block_guard(reaper)
+local UNDO_GROUP_IDLE_SECONDS = 60
+
+-- ============================================================
+-- Undo points for simple edits
+-- ============================================================
+
+-- Batch and structural handlers wrap their work in their own undo block, so
+-- one Ctrl+Z reverses the whole call. Simple edits (a fader, a pan, a plugin
+-- bypass, a send, a marker...) never did, so REAPER's undo skipped over them
+-- and rolled back an earlier step instead. Commands listed here get one named
+-- undo point ("MCP: <command>") recorded after they succeed, unless they
+-- ended a block of their own.
+--
+-- Every handler that changes REAPER state and has no undo block of its own
+-- must appear in exactly one of the two tables below; a test fails when a new
+-- one is added without a decision.
+local UNDO_POINT_COMMANDS = {
+  compose_ensure_tracks = true,
+  envelope_add_points = true,
+  envelope_clear_range = true,
+  fx_add = true,
+  fx_disable = true,
+  fx_enable = true,
+  fx_move = true,
+  fx_navigate_preset = true,
+  fx_rename = true,
+  fx_set_param = true,
+  fx_set_param_by_name = true,
+  fx_set_preset = true,
+  item_delete = true,
+  item_insert_media = true,
+  item_move = true,
+  item_move_to_track = true,
+  item_set_fade = true,
+  item_set_length = true,
+  item_set_mute = true,
+  item_set_volume = true,
+  item_split = true,
+  item_take_add = true,
+  item_take_delete_active = true,
+  item_take_set_active = true,
+  marker_add = true,
+  marker_add_region = true,
+  marker_delete = true,
+  marker_edit = true,
+  midi_humanize = true,
+  midi_quantize = true,
+  midi_set_item_extents = true,
+  midi_sort = true,
+  project_set_metadata = true,
+  project_set_notes_info = true,
+  send_create = true,
+  send_remove = true,
+  send_set_midi_channel = true,
+  send_set_mute = true,
+  send_set_pan = true,
+  send_set_volume = true,
+  tempo_add_marker = true,
+  tempo_clear_all = true,
+  tempo_delete_marker = true,
+  track_rename = true,
+  track_set_color = true,
+  track_set_folder = true,
+  track_set_input = true,
+  track_set_mute = true,
+  track_set_pan = true,
+  track_set_record_arm = true,
+  track_set_solo = true,
+  track_set_state_chunk = true,
+  track_set_volume = true,
+  transport_set_bpm = true,
+  transport_set_time_signature = true,
+  -- Item, MIDI and take edits. They wrap their work in undo blocks, which
+  -- REAPER doesn't capture for this data, so the dispatcher records their
+  -- step instead and keeps the blocks out of REAPER (see install_block_guard).
+  chops_create_virtual_slice = true,
+  compose_arrangement = true,
+  compose_single_track = true,
+  edit_section = true,
+  item_clone_to_position = true,
+  item_create_midi = true,
+  item_duplicate = true,
+  item_split_at_positions = true,
+  item_split_at_transients = true,
+  items_apply = true,
+  midi_delete_all_notes = true,
+  midi_delete_cc = true,
+  midi_delete_note = true,
+  midi_insert_cc = true,
+  midi_insert_note = true,
+  midi_insert_notes_batch = true,
+  midi_insert_program_change = true,
+  midi_set_note = true,
+  take_set_pitch = true,
+  take_set_playrate = true,
+  wipe_all_midi = true,
+}
+
+-- Deliberately not given an undo point, with the reason.
+local UNDO_EXEMPT_COMMANDS = {
+  analyze_score = "read-only analysis of the project",
+  fx_scan_params = "restores every parameter value it writes while scanning",
+  item_select = "selection only, not project content",
+  item_take_list = "read-only listing of takes",
+  midi_select_notes = "selection only, not project content",
+  project_backup = "saves a copy to disk, changes nothing in the project",
+  project_export_audio = "renders to a file, changes nothing in the project",
+  project_get_metadata = "read-only",
+  project_get_notes_info = "read-only",
+  project_main_action = "runs a REAPER action, which records its own undo point",
+  project_new = "replaces the whole project",
+  project_open = "replaces the whole project",
+  project_redo = "recording a point after a redo would erase the redo stack",
+  project_save = "file operation, changes nothing in the project",
+  project_save_as = "file operation, changes nothing in the project",
+  project_set_grid = "editing preference, not project content",
+  project_set_ripple_mode = "editing preference, not project content",
+  project_undo = "recording a point after an undo would erase the redo stack",
+  script_run_start = "runs a user script that manages its own undo",
+  selection_deselect_all_tracks = "selection only, not project content",
+  selection_select_all_tracks = "selection only, not project content",
+  track_freeze = "a REAPER action that records its own undo point",
+  track_select = "selection only, not project content",
+  track_unfreeze = "a REAPER action that records its own undo point",
+  transport_pause = "playback state, not project content",
+  transport_play = "playback state, not project content",
+  transport_record = "playback state, not project content",
+  transport_set_playrate = "playback state, not project content",
+  transport_set_position = "playback state, not project content",
+  transport_stop = "playback state, not project content",
+  transport_toggle_metronome = "playback state, not project content",
+  transport_toggle_repeat = "playback state, not project content",
+  project_undo_group = "recording a point after an undo would erase the redo stack",
+  undo_group_begin = "only labels the steps that follow, changes nothing in the project",
+  undo_group_end = "only stops labelling steps, changes nothing in the project",
+}
+
+-- Whether the dispatcher should record an undo point for a finished command.
+-- A failed command gets none: an undo step that undoes nothing is worse than
+-- no step at all. `committed` means the command already ended a block of its
+-- own, so an undo point exists.
+local function should_record_undo_point(command, ok, result, err, committed)
+  if committed or not ok or err or not result then return false end
+  return UNDO_POINT_COMMANDS[command] == true
+end
+
+-- Undo groups. A tool that runs several commands wraps them in a group so
+-- the undo steps it makes are labelled "MCP: <tool>#<run> > <command>". Each
+-- command still records its own step; see install_block_guard.
+local undo_group_commands = {}
+
+function undo_group_commands.undo_group_begin(p)
+  local name = tostring(p.name or "group")
+  if #name > 100 then name = name:sub(1, 100) end
+  local run = undo_group.begin(name, reaper.time_precise())
+  return {success = true, group = name, run = run}
+end
+
+function undo_group_commands.undo_group_end(p)
+  return {success = true, closed = undo_group.finish()}
+end
+
+for name, handler in pairs(undo_group_commands) do handlers[name] = handler end
+
+-- ============================================================
 -- Main loop
 -- ============================================================
+
+-- Record one named undo step. REAPER's state-change calls each capture what
+-- the other misses when used from this bridge: Undo_OnStateChange2 captures
+-- items, MIDI and takes, and the flagged Undo_OnStateChangeEx2 captures
+-- everything else (track, FX, send, marker, tempo...). Calling both for one
+-- command can record an item change twice, because REAPER syncs item state
+-- lazily: a tool that sent commands back to back sometimes left two identical
+-- steps. So each command uses exactly one call, chosen by what it changes. A
+-- test checks that every command that touches items, MIDI or takes is listed.
+local UNDO_ITEM_COMMANDS = {
+  chops_create_virtual_slice = true,
+  compose_arrangement = true,
+  compose_single_track = true,
+  edit_section = true,
+  item_clone_to_position = true,
+  item_create_midi = true,
+  item_delete = true,
+  item_duplicate = true,
+  item_insert_media = true,
+  item_move = true,
+  item_move_to_track = true,
+  item_set_fade = true,
+  item_set_length = true,
+  item_set_mute = true,
+  item_set_volume = true,
+  item_split = true,
+  item_split_at_positions = true,
+  item_split_at_transients = true,
+  item_take_add = true,
+  item_take_delete_active = true,
+  item_take_set_active = true,
+  items_apply = true,
+  midi_delete_all_notes = true,
+  midi_delete_cc = true,
+  midi_delete_note = true,
+  midi_humanize = true,
+  midi_insert_cc = true,
+  midi_insert_note = true,
+  midi_insert_notes_batch = true,
+  midi_insert_program_change = true,
+  midi_quantize = true,
+  midi_set_item_extents = true,
+  midi_set_note = true,
+  midi_sort = true,
+  take_set_pitch = true,
+  take_set_playrate = true,
+  wipe_all_midi = true,
+}
+
+-- Replaces a whole track's state, which includes the items on it, so it needs
+-- both kinds of capture. It is rarely used, so the small chance of a repeated
+-- step is accepted here rather than risk a step that restores nothing.
+local UNDO_BOTH_CALLS_COMMANDS = {
+  track_set_state_chunk = true,
+}
+
+local function record_undo_step(command, name)
+  if UNDO_ITEM_COMMANDS[command] then
+    reaper.Undo_OnStateChange2(0, name)
+  elseif UNDO_BOTH_CALLS_COMMANDS[command] then
+    reaper.Undo_OnStateChange2(0, name)
+    reaper.Undo_OnStateChangeEx2(0, name, -1, -1)
+  else
+    reaper.Undo_OnStateChangeEx2(0, name, -1, -1)
+  end
+end
 
 local function process_command()
   local f = io.open(command_file, "r")
@@ -5359,7 +6162,31 @@ local function process_command()
     return
   end
 
+  -- A command whose undo step is recorded below keeps its own undo blocks out
+  -- of REAPER (see install_block_guard), so it can't leave an empty step.
+  undo_commands.enter(UNDO_POINT_COMMANDS[cmd.command] == true)
   local ok, result, err = pcall(handler, cmd.params or {})
+
+  -- Before any response is written, whatever the outcome: close a UI
+  -- refresh hold or undo block the command left open.
+  local unwound = unwind_open_blocks()
+  local step_name = undo_commands.description() or ("MCP: " .. cmd.command)
+  undo_commands.enter(false)
+  if unwound.ui > 0 or unwound.undo > 0 then
+    reaper.ShowConsoleMsg(string.format(
+      "ReaperMCP: '%s' left %d UI refresh hold(s) and %d undo block(s) open; closed them.\n",
+      tostring(cmd.command), unwound.ui, unwound.undo))
+    reaper.UpdateArrange()
+  end
+
+  -- A command inside an undo group keeps the group alive, and its undo
+  -- step is labelled with the tool that ran it.
+  undo_group.touch(reaper.time_precise())
+  if should_record_undo_point(cmd.command, ok, result, err, unwound.committed) then
+    -- Best effort: failing to record an undo point must never fail the command.
+    pcall(record_undo_step, cmd.command, undo_group.label(step_name))
+  end
+
   if not ok then
     -- pcall failed — result contains the error message
     local errmsg = "Internal error: " .. tostring(result)
@@ -5380,6 +6207,11 @@ end
 local function main_loop()
   if not running then return end
   update_heartbeat()
+  -- Failsafe: stop labelling steps for an undo group its caller never closed.
+  local expired = undo_group.expire(reaper.time_precise(), UNDO_GROUP_IDLE_SECONDS)
+  if expired then
+    reaper.ShowConsoleMsg("ReaperMCP: undo group '" .. expired .. "' was never closed; stopped labelling.\n")
+  end
   process_command()
   reaper.defer(main_loop)
 end

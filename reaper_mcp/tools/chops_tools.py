@@ -27,6 +27,7 @@ import random
 import re
 
 from mcp.server.fastmcp import FastMCP
+from reaper_mcp.undo_group import undo_grouped
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 
 
@@ -173,7 +174,9 @@ def register(mcp: FastMCP):
     async def item_split_at_transients(item_index: int) -> dict:
         """Slice an audio item at every detected transient.
 
-        Uses REAPER's native transient detection (action 40310). Sensitivity
+        Uses REAPER's native transient detection (stepping "Move cursor to
+        next transient in items" across the item; the edit cursor is put
+        back afterwards). Sensitivity
         is controlled by REAPER's project settings (Options → Preferences →
         Project → Item handling → Transient detection sensitivity), not
         by this tool — set it once in REAPER and it applies to every call.
@@ -631,6 +634,7 @@ def register(mcp: FastMCP):
         }
 
     @mcp.tool()
+    @undo_grouped(client, "chop_pipeline")
     async def chop_pipeline(
         vocal_item_index: int,
         chord_progression: str = "",
@@ -1027,6 +1031,7 @@ def register(mcp: FastMCP):
         }
 
     @mcp.tool()
+    @undo_grouped(client, "stack_chop_layers")
     async def stack_chop_layers(
         item_indices: str,
         intervals_semitones: str = "[7, 12]",

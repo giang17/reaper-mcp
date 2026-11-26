@@ -15,8 +15,26 @@ _TRACK_ENVELOPE_NAMES = {
     "Volume (Pre-FX)", "Pan (Pre-FX)", "Width (Pre-FX)",
 }
 
+MASTER_TRACK_INDEX = -1
+
+
+def _check_track_index(track_index: int) -> None:
+    """Envelope tools address the master track as index -1."""
+    if track_index < MASTER_TRACK_INDEX:
+        raise ReaperMCPError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            "track_index must be >= 0, or -1 for the master track",
+        )
+
+
 _GAIN_ENVELOPES = {"Volume", "Volume (Pre-FX)", "Width", "Width (Pre-FX)"}
 _PAN_ENVELOPES = {"Pan", "Pan (Pre-FX)"}
+
+# Subset of _GAIN_ENVELOPES actually measured in dB, where an all-zero batch
+# is almost certainly an AI unit-conversion mistake (see _validate_gain_batch).
+# Width isn't dB-based at all — 0.0 width means "collapsed to mono", a
+# perfectly ordinary intentional request, not silence.
+_DB_ENVELOPES = {"Volume", "Volume (Pre-FX)"}
 
 
 def _validate_envelope_value(value: float, envelope_name: str, is_fx_param: bool, index: int):
@@ -26,6 +44,11 @@ def _validate_envelope_value(value: float, envelope_name: str, is_fx_param: bool
     negative. A silent write here doesn't error — it just corrupts the
     track (negative/zero gain reads as silence or worse), so this has to be
     caught at the boundary, not discovered after the fact.
+
+    IMPORTANT — do NOT clamp negative dB values to 0.0. A value of 0.0 is
+    −inf dB (total silence). If you have a dB value, convert it first:
+        linear_gain = 10 ** (db_value / 20)
+    e.g. -6 dB → 10 ** (-6/20) ≈ 0.501, not 0.0.
     """
     if is_fx_param:
         if not 0.0 <= value <= 1.0:
@@ -40,7 +63,8 @@ def _validate_envelope_value(value: float, envelope_name: str, is_fx_param: bool
                 ErrorCode.VALUE_OUT_OF_RANGE,
                 f"point[{index}]: {envelope_name} envelope value must be linear gain "
                 f"(>= 0, 1.0 = unity/0dB) — got {value!r}, which looks like a raw dB "
-                f"value. Convert first: value = 10 ** (db / 20).",
+                f"value. Convert first: value = 10 ** (db / 20). "
+                f"Do NOT clamp negative dB to 0.0 — that is silence (−inf dB).",
             )
     elif envelope_name in _PAN_ENVELOPES:
         if not -1.0 <= value <= 1.0:
@@ -54,6 +78,33 @@ def _validate_envelope_value(value: float, envelope_name: str, is_fx_param: bool
                 ErrorCode.VALUE_OUT_OF_RANGE,
                 f"point[{index}]: Mute envelope value must be 0.0 or 1.0, got {value!r}",
             )
+
+
+def _validate_gain_batch(pts: list, envelope_name: str) -> None:
+    """Reject an all-zero batch on a dB-based envelope (Volume).
+
+    A single zero-value point is legal (fade to silence). An entire batch of
+    2+ points all at 0.0 is −inf dB everywhere — almost always a model
+    unit-conversion failure where negative dB values were clamped to 0.0
+    instead of converted with 10 ** (db / 20).
+
+    Width isn't checked here even though it shares _GAIN_ENVELOPES for its
+    per-point >= 0 rule: Width isn't dB-based, so there's no equivalent
+    conversion mistake to catch, and an all-zero Width batch (collapsed to
+    mono) is a perfectly ordinary intentional request, not silence.
+    """
+    if envelope_name not in _DB_ENVELOPES:
+        return
+    if len(pts) > 1 and all(pt.get("value", 1.0) == 0.0 for pt in pts):
+        raise ReaperMCPError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            f"All {len(pts)} points have value=0.0 on a {envelope_name} envelope, "
+            f"which is \u2212inf dB (total silence). This almost certainly means dB "
+            f"values were clamped to 0 instead of converted. "
+            f"Fix: value = 10 ** (db / 20)  \u2014 e.g. -6 dB \u2192 0.501, 0 dB \u2192 1.0. "
+            f"Individual zero-value points are allowed (fades); a uniform-zero "
+            f"batch is not.",
+        )
 
 
 def register(mcp: FastMCP):
@@ -75,15 +126,18 @@ def register(mcp: FastMCP):
         For FX param envelopes: pass `fx_index` and `param_index` (get these
         from `fx_get_params`). `envelope_name` is ignored when FX param is set.
 
+        Values come back in the same units envelope_add_points takes (Volume
+        as linear gain, 1.0 = 0 dB; Pan -1.0 left to +1.0 right), converted
+        from REAPER's internal envelope scale.
+
         Args:
-            track_index: Track.
+            track_index: 0-based track index, or -1 for the master track.
             envelope_name: Named track envelope (ignored if fx_index+param_index set).
             fx_index: FX slot index, -1 to target track envelope instead.
             param_index: FX parameter index, -1 to target track envelope instead.
             max_results: Cap on returned points (default 2000, prevents context blow-up).
         """
-        if track_index < 0:
-            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
+        _check_track_index(track_index)
         if max_results <= 0 or max_results > 20000:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "max_results must be 1-20000")
         if fx_index < 0 and envelope_name not in _TRACK_ENVELOPE_NAMES:
@@ -115,19 +169,23 @@ def register(mcp: FastMCP):
         Value units:
           - Volume track env: linear gain where 1.0 = unity (0 dB), 2.0 ≈ +6 dB,
                               0.5 ≈ -6 dB. Use 10**(db/20) to convert from dB.
+                              WARNING: 0.0 = −inf dB (total silence). NEVER clamp a
+                              negative dB value to 0.0 — convert it instead:
+                              value = 10 ** (db / 20)  # e.g. -6 dB → 0.501
           - Pan: -1.0 (hard left) to +1.0 (hard right).
           - Mute: 0.0 or 1.0.
           - FX params: 0.0-1.0 normalized (same as setup_fx_chain's params/params_by_index).
 
         Args:
-            track_index: Track.
+            track_index: 0-based track index, or -1 for the master track.
             points: JSON array of `{"time":s, "value":v, "shape":0, "tension":0}`.
             envelope_name: Track envelope name (ignored with FX param).
             fx_index / param_index: Target FX param envelope (-1 for track env).
             create: If the envelope doesn't exist yet, create it (default True).
+                    Creating keeps the track's fader, pan, width and track
+                    selection as they were.
         """
-        if track_index < 0:
-            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
+        _check_track_index(track_index)
         try:
             pts = json.loads(points)
         except (json.JSONDecodeError, TypeError) as e:
@@ -145,6 +203,10 @@ def register(mcp: FastMCP):
                     f"point[{i}] must be object with 'time' and 'value' keys",
                 )
             _validate_envelope_value(pt["value"], envelope_name, is_fx_param, i)
+
+        if not is_fx_param:
+            _validate_gain_batch(pts, envelope_name)
+
         payload = {
             "track_index": track_index,
             "envelope_name": envelope_name,
@@ -168,14 +230,13 @@ def register(mcp: FastMCP):
         """Delete all envelope points in a time range.
 
         Args:
-            track_index: Track.
+            track_index: 0-based track index, or -1 for the master track.
             start_time: Range start in seconds (>= 0).
             end_time: Range end in seconds (> start_time).
             envelope_name: Track envelope name.
             fx_index / param_index: Target FX param envelope (-1 for track env).
         """
-        if track_index < 0:
-            raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
+        _check_track_index(track_index)
         if start_time < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "start_time must be >= 0")
         if end_time <= start_time:

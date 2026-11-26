@@ -15,8 +15,8 @@ Auto-detects FabFilter Pro-Q 3 / Pro-C 2 / Pro-R; falls back to REAPER stock
 import json
 import logging
 
-from reaper_mcp.mix_engine.detect import detect_plugins
-from reaper_mcp.mix_engine.plugins import get_plugin_profile
+from reaper_mcp.mix_engine.plugins import get_plugin_profile_for
+from reaper_mcp.mix_engine.selection import select_plugins
 from reaper_mcp.mix_engine.profiles import (
     VOLUME_STAGING, EQ_PROFILES, COMPRESSION_PROFILES, REVERB_BUSES,
     INSTRUMENT_FAMILIES, SEND_ROUTING,
@@ -33,13 +33,6 @@ _MIX_FX_PREFIX = "[MIX] "
 
 # Names used to identify mix-engine-created tracks/FX for cleanup
 _REVERB_BUS_PREFIX = "MIX:"
-
-# Backward-compat fallback list — used only if we can't find any
-# prefix-tagged FX on a track. Projects from before the prefix system
-# (or REAPER < 6.37) fall through to substring matching.
-_MIX_EQ_NAMES = {"ReaEQ", "FabFilter Pro-Q 3"}
-_MIX_COMPRESSOR_NAMES = {"ReaComp", "FabFilter Pro-C 2"}
-_MIX_REVERB_NAMES = {"ReaVerbate", "FabFilter Pro-R"}
 
 
 def _tag_mix_fx(entry: dict) -> dict:
@@ -79,23 +72,23 @@ async def run_mix_pipeline(
 
     v2_profile = get_v2_profile(style) if style else None
 
-    suite = await detect_plugins(client)
-    plugin_profile = get_plugin_profile(suite)
-    logger.info("Mix engine using plugin suite: %s", suite.value)
+    selection = await select_plugins(client)
+    plugin_profile = get_plugin_profile_for(selection)
+    logger.info("Mix engine plugin families: %s", selection.summary()["plugin_families"])
 
     if v2_profile is not None:
         logger.info("Mix path: v2 catalog (%s / family=%s)", v2_profile.name, v2_profile.family)
-        return await _run_v2_pipeline(client, v2_profile, plugin_profile, suite, clean)
+        return await _run_v2_pipeline(client, v2_profile, plugin_profile, selection, clean)
 
     logger.info("Mix path: legacy orchestral (style=%r)", style)
-    return await _run_legacy_pipeline(client, track_map, plugin_profile, suite, clean)
+    return await _run_legacy_pipeline(client, track_map, plugin_profile, selection, clean)
 
 
 # ════════════════════════════════════════════════════════════════════
 #  v2 PATH — catalog-driven, role-based, sidechain-aware
 # ════════════════════════════════════════════════════════════════════
 
-async def _run_v2_pipeline(client, profile, plugin_profile, suite, clean):
+async def _run_v2_pipeline(client, profile, plugin_profile, selection, clean):
     from reaper_mcp.mix_engine.profiles_v2 import resolve_roles
 
     # 1. Get live tracks with names
@@ -152,7 +145,7 @@ async def _run_v2_pipeline(client, profile, plugin_profile, suite, clean):
         "path": "v2_catalog",
         "style": profile.name,
         "family": profile.family,
-        "plugin_suite": suite.value,
+        **selection.summary(),
         "tracks_matched": len(role_map),
         "role_map": {ti: role for ti, role in sorted(role_map.items())},
         "unmatched_tracks": unmatched,
@@ -333,7 +326,7 @@ async def _v2_apply_sidechains(client, profile, role_map) -> int:
 #  LEGACY PATH — dict-based, orchestral, unchanged behavior
 # ════════════════════════════════════════════════════════════════════
 
-async def _run_legacy_pipeline(client, track_map, plugin_profile, suite, clean):
+async def _run_legacy_pipeline(client, track_map, plugin_profile, selection, clean):
     if clean:
         await _clean_mix_fx(client, track_map, plugin_profile)
 
@@ -346,7 +339,7 @@ async def _run_legacy_pipeline(client, track_map, plugin_profile, suite, clean):
     return {
         "success": True,
         "path": "legacy_orchestral",
-        "plugin_suite": suite.value,
+        **selection.summary(),
         "volume_staged": vol_applied,
         "eq_applied": eq_applied,
         "compression_applied": comp_applied,
@@ -355,17 +348,23 @@ async def _run_legacy_pipeline(client, track_map, plugin_profile, suite, clean):
     }
 
 
+async def _remove_fx_indices(client, track_index: int, fx_indices: list[int]) -> None:
+    """Remove several FX from one track in a single fx_remove_batch call."""
+    await client.execute(
+        "fx_remove_batch",
+        entries=json.dumps([{"track_index": track_index, "fx_indices": fx_indices}]),
+    )
+
+
 async def _clean_mix_fx_generic(client, track_indices: list[int]) -> None:
     """Remove previously-added mix EQ/compressor from the given tracks and
     delete MIX:* reverb buses.
 
-    Primary match: FX whose display name starts with the "[MIX] " prefix —
-    these are FX the mix engine added itself via setup_fx_chain's
-    `renamed_name` field, so removing them never touches user-added FX.
-
-    Fallback (only if no tagged FX found on a track): match common mix
-    plugin names by substring. This handles projects from before the
-    prefix system or REAPER versions without TrackFX_SetNamedConfigParm.
+    Only FX whose display name starts with the "[MIX] " prefix are removed —
+    FX the mix engine added itself via setup_fx_chain's `renamed_name`
+    field. There is deliberately no name-matching fallback: it used to
+    delete a user's own Pro-Q 3 / Pro-C 2 / ReaEQ on any track with no
+    tagged FX.
 
     Operation is scoped to `track_indices` (tracks the mix engine is
     currently processing), so user FX on other tracks is never touched.
@@ -377,32 +376,12 @@ async def _clean_mix_fx_generic(client, track_indices: list[int]) -> None:
             data = chain_result.get("data", chain_result)
             fx_chain = data.get("fx_chain", [])
 
-            # Primary pass — remove anything we tagged with [MIX].
-            any_tagged = False
-            for fx in reversed(fx_chain):
-                fx_name = fx.get("name", "")
-                if fx_name.startswith(_MIX_FX_PREFIX):
-                    await client.execute("fx_remove", track_index=ti, fx_index=fx["index"])
-                    logger.info("Cleanup: removed tagged %r from track %d", fx_name, ti)
-                    removed += 1
-                    any_tagged = True
-
-            # Fallback pass — only if no tagged FX were found. Preserves
-            # old-project behaviour but is less safe (can match user FX).
-            if not any_tagged:
-                chain_result = await client.execute("fx_get_chain", track_index=ti)
-                data = chain_result.get("data", chain_result)
-                fx_chain = data.get("fx_chain", [])
-                for fx in reversed(fx_chain):
-                    fx_name = fx.get("name", "")
-                    for mix_fx_name in _MIX_EQ_NAMES | _MIX_COMPRESSOR_NAMES:
-                        if mix_fx_name in fx_name:
-                            await client.execute(
-                                "fx_remove", track_index=ti, fx_index=fx["index"]
-                            )
-                            logger.info("Cleanup (fallback): removed %r from track %d", fx_name, ti)
-                            removed += 1
-                            break
+            tagged = [fx for fx in fx_chain if fx.get("name", "").startswith(_MIX_FX_PREFIX)]
+            if tagged:
+                await _remove_fx_indices(client, ti, [fx["index"] for fx in tagged])
+                for fx in tagged:
+                    logger.info("Cleanup: removed tagged %r from track %d", fx.get("name", ""), ti)
+                removed += len(tagged)
         except Exception as e:
             logger.warning("Could not clean FX on track %d: %s", ti, e)
 
@@ -411,11 +390,15 @@ async def _clean_mix_fx_generic(client, track_indices: list[int]) -> None:
         all_tracks = await client.execute("track_get_all")
         data = all_tracks.get("data", all_tracks)
         tracks = data.get("tracks", [])
-        for t in reversed(tracks):
-            name = t.get("name", "")
-            if name.startswith(_REVERB_BUS_PREFIX):
-                await client.execute("track_delete", track_index=t["index"])
-                buses_removed += 1
+        bus_indices = [
+            t["index"] for t in tracks if t.get("name", "").startswith(_REVERB_BUS_PREFIX)
+        ]
+        if bus_indices:
+            await client.execute(
+                "track_delete_batch",
+                entries=json.dumps([{"track_indices": sorted(bus_indices, reverse=True)}]),
+            )
+            buses_removed = len(bus_indices)
     except Exception as e:
         logger.warning("Could not clean reverb buses: %s", e)
 

@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for every MCP tool exposed by ReaperMCP — **180 tools across 27 modules**. Grouped by domain; each tool links to its source module.
+Complete reference for every MCP tool exposed by ReaperMCP — **181 tools across 26 modules**. Grouped by domain; each tool links to its source module.
 
 > All tools are async. Numeric inputs are range-validated before being sent to REAPER. Track/item indices are 0-based.
 
@@ -12,12 +12,12 @@ Set `REAPER_MCP_PROFILE=<name>` in your MCP client's server config to register o
 
 | Profile | Modules | Exact Tools | Instruction Chars | Use when |
 |---------|--------:|------------:|------------------:|----------|
-| `full` | 27 | 180 | ~13.2k | Default. You're on Claude / GPT-4 / Gemini-class models. |
-| `composition` | 17 | 137 | ~7.6k | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
-| `production` | 18 | 143 | ~10.1k | MIDI instruments, stem bouncing, FX chains (`setup_fx_chain`/`setup_effect_bus`), and mixing. Also gets `compose_tools` (`get_track_instruments`/`analyze_score`/`compose_arrangement`) — previously missing despite loading the composition instructions. Drops arrangement helpers (patterns/chops). |
-| `mixing` | 12 | 84 | ~7.8k | Mixing / mastering / bus pipelines, including batch FX setup (`setup_fx_chain`/`setup_effect_bus`). Drops MIDI / most composition. |
-| `analysis` | 6 | 61 | ~3.9k | Inspect and measure only. Read-mostly workflow. |
-| `minimal` | 4 | 51 | ~1.7k | Smoke test / basic control surface. |
+| `full` | 26 | 181 | ~14.9k | Default. You're on Claude / GPT-4 / Gemini-class models. |
+| `composition` | 17 | 138 | ~8.4k | Writing or editing music (incl. patterns, loops, vocal chops, batch item/marker edits, ReaScript). Drops FX, mix, sidechain, analysis. |
+| `production` | 18 | 144 | ~11.8k | MIDI instruments, stem bouncing, FX chains (`setup_fx_chain`/`setup_effect_bus`), and mixing. Also gets `compose_tools` (`get_track_instruments`/`analyze_score`/`compose_arrangement`) — previously missing despite loading the composition instructions. Drops arrangement helpers (patterns/chops). |
+| `mixing` | 12 | 84 | ~9.5k | Mixing / mastering / bus pipelines, including batch FX setup (`setup_fx_chain`/`setup_effect_bus`). Drops MIDI / most composition. |
+| `analysis` | 6 | 62 | ~4.6k | Inspect and measure only. Read-mostly workflow. |
+| `minimal` | 4 | 52 | ~2.4k | Smoke test / basic control surface. |
 
 Audio-library search (`scan_audio_folder`, `list_audio_subfolders`, `detect_common_bpm`, `load_loops` — the `loops_tools` module) is available in every profile, since finding and importing audio files isn't specific to any one workflow.
 
@@ -133,7 +133,7 @@ Create, delete, rename, route, colour, freeze, and inspect tracks. Source: `trac
 | `track_get_all()` | List every track with name, volume, pan, mute/solo/arm flags, `channel_count` (I_NCHAN), and `sample_filenames`. |
 | `track_get_info(track_index)` | Detailed info for one track, including `channel_count` and `sample_filenames`. |
 | `track_create(index=-1, name="")` | Insert a new track at an index (or append). |
-| `track_delete(track_index)` | Delete a track. |
+| `track_delete_batch(entries)` | Delete one track, several, or all of them in one call. `entries` is a JSON array; each entry has exactly one of `{"all": true}`, `{"track_index": 3}`, or `{"track_indices": [0, 2, 5]}`. Indices refer to the numbering at the start of the call, and deletion order is handled for you, so entries can overlap or come in any order. The master track can't be deleted. A bad index is listed in the response's `errors` array without aborting the rest; the response lists what was deleted (original index and name) and `remaining_tracks`. Takes a project backup first and is one undo step. Max 200 entries. |
 | `track_rename(track_index, name)` | Rename a track. |
 | `track_set_volume(track_index, volume_db)` | Set fader level in dB. |
 | `track_set_pan(track_index, pan)` | Set pan (-1.0 = full left, 1.0 = full right). |
@@ -174,8 +174,9 @@ Project lifecycle, save/load, rendering, undo. Source: `project_tools.py`.
 | `project_save()` | Save the current project. |
 | `project_save_as(path)` | Save the project to a new path. |
 | `project_export_audio(path, format="wav")` | Render the project to audio. Supported formats: `wav`, `mp3`, `ogg`, `flac`, `aiff`. |
-| `project_undo()` | Undo the last action. |
-| `project_redo()` | Redo the last undone action. |
+| `project_undo(steps=1)` | Undo the last step, or the last `steps` (1-100) in one call, and report every step undone. Every change made through these tools is one named undo step (`MCP: <tool>`), and a batch call is one step for the whole call. |
+| `project_redo(steps=1)` | Redo the last undone step, or the last `steps` (1-100) in one call. |
+| `project_undo_group()` | Undo every step of the most recent multi-command tool run (say, everything `engine_mix` just did). Steps of such a run are named `MCP: <tool>#<run> > <command>`; it stops at the first step from anything else, and refuses when the last step wasn't from such a run. |
 | `project_get_notes()` | Get the project's notes field (free-text area). |
 | `project_set_notes(notes)` | Replace the project's notes field. |
 | `project_get_metadata()` | Get project render metadata (title, author, album, genre, etc.) — the fields embedded into rendered file tags (ID3/Vorbis/APE) and render-filename templates. Values are write-only in REAPER's API; returns which fields are set, not their values. |
@@ -322,9 +323,11 @@ Inter-track sends — aux sends, sidechain feeds, parallel buses. Source: `send_
 
 Remove, configure plugins; read parameters; manage presets; inspect pin mappings. Adding plugins and writing parameters is `setup_fx_chain` (see Compose/Edit) — always, even for one plugin on one track: it applies params in the order some plugins require (confirmed: FabFilter Pro-Q 3/Pro-C 2 need a band's Used/Enabled flag written before its other params, or the write has no audible effect), which the removed single-shot `fx_add`/`fx_set_param`/`fx_set_param_by_name` did not. Source: `fx_tools.py`.
 
+**Master track:** every tool below that takes a `track_index` accepts `-1` for the master track. `setup_fx_chain` and `configure_tracks` accept it too, so a mastering chain can be built in the same call as track FX.
+
 | Tool | Description |
 |------|-------------|
-| `fx_remove(track_index, fx_index)` | Remove the plugin at an FX-chain slot. |
+| `fx_remove_batch(entries)` | Remove one FX, several, or a whole chain — across one or many tracks — in one call. `entries` is a JSON array; each entry has a `track_index` (`-1` = master) and exactly one of `{"all": true}`, `{"fx_index": 3}`, or `{"fx_indices": [0, 3, 4]}`. Indices refer to each chain as it is when the call starts, and deletion order is handled for you, so entries can overlap or come in any order. A bad track or index is listed in the response's `errors` array without aborting the rest; the response also reports `removed` and each track's remaining `fx_count`. One undo step. Max 200 entries. |
 | `fx_get_chain(track_index)` | List every plugin in the track's FX chain. |
 | `fx_get_params(track_index, fx_index)` | All parameters of a plugin (index, name, value, min/max). |
 | `fx_scan_params(track_index, fx_index)` | Sweep a plugin's parameters to learn real range/units/step counts and infer response curves. Results are cached on disk by plugin name. |
@@ -346,7 +349,7 @@ Discover what plugins the user has installed, and pin per-category favourites. S
 | Tool | Description |
 |------|-------------|
 | `fx_list_installed(category="", full_list=False)` | Return every installed plugin plus the best-available EQ / compressor / reverb / limiter / de-esser / gate / saturator / multiband / stereo tool, racks detected (Waves StudioRack, Blue Cat PatchWork, Kilohearts Snap Heap, …), and any user overrides. `all_installed` caps at 150 entries unless `full_list=True`. |
-| `set_fx_preferences(preferences)` | Pin a category → plugin mapping. Stored at `%APPDATA%/reaper_mcp/fx_prefs.json` (or `~/.config/reaper_mcp/` on *nix). |
+| `set_fx_preferences(preferences)` | Pin a category → plugin mapping. Stored at `%APPDATA%/reaper_mcp/fx_prefs.json` (or `~/.config/reaper_mcp/` on *nix). The mix and master pipelines apply a preference for `eq`, `compressor`, `reverb` and `limiter` when they have a parameter map for that plugin (REAPER stock, and FabFilter Pro-Q 3 / Pro-C 2 / Pro-R / Pro-L 2). The response's `engine_support` reports which of your preferences the engine can use; for any it can't, the pipeline uses the best supported plugin and says so in its result's `preferences_ignored`. |
 
 ## Mix & Master
 
@@ -405,12 +408,12 @@ Heavier-duty editing — project-scale wipes, section replacements, batch setup.
 |------|-------------|
 | `wipe_all_midi(tracks="")` | **The only correct way to clear MIDI.** Deletes MIDI items only (audio items are left untouched), clears markers/regions on a full wipe, resets composition state. Pass `tracks="[0,1,2]"` for a partial wipe. |
 | `reset_composition()` | Full project reset — wipe MIDI, delete all tracks, return to a blank slate. |
-| `configure_tracks(tracks)` | Batch-create or rename tracks with VSTi, colour, volume, pan. |
+| `configure_tracks(tracks)` | Batch-create or rename tracks with VSTi, colour, volume, pan. A `track_index` of `-1` targets the master track. |
 | `setup_routing(sends)` | Batch-create track sends from a JSON description. |
 | `add_markers_batch(markers)` | Add many markers and regions in one call (section-by-section arrangement). |
 | `rewrite_cc(...)` | Replace CC data on one or more tracks without touching notes. |
 | `edit_section(tracks, start_time, end_time, mode)` | Replace MIDI inside a time range. Modes: `all`, `notes_only`, `ccs_only`. |
-| `setup_fx_chain(tracks)` | Batch-apply FX chains to multiple tracks from a single description. |
+| `setup_fx_chain(tracks)` | Batch-apply FX chains to multiple tracks from a single description. A `track_index` of `-1` targets the master track. |
 | `setup_effect_bus(...)` | Create an effect bus (usually reverb) with sends from chosen source tracks. |
 
 ## Patterns

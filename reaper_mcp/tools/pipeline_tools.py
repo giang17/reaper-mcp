@@ -14,6 +14,7 @@ import json
 import logging
 
 from mcp.server.fastmcp import FastMCP
+from reaper_mcp.undo_group import undo_grouped
 from reaper_mcp_shared.error_codes import ReaperMCPError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,11 @@ def compute_items_extent(items: list[dict]) -> tuple[float | None, float]:
 
 def register(mcp: FastMCP):
     from reaper_mcp.main import client
-    from reaper_mcp.mix_engine.detect import detect_plugins
-    from reaper_mcp.mix_engine.plugins import get_plugin_profile
+    from reaper_mcp.mix_engine.plugins import get_plugin_profile_for
+    from reaper_mcp.mix_engine.selection import select_plugins
 
     @mcp.tool()
+    @undo_grouped(client, "setup_parallel_compression")
     async def setup_parallel_compression(
         source_tracks: str,
         bus_name: str = "BUS: Parallel Comp",
@@ -78,8 +80,8 @@ def register(mcp: FastMCP):
             raise ReaperMCPError(ErrorCode.INVALID_PARAMETER,
                                  "source_tracks must be a non-empty array")
 
-        suite = await detect_plugins(client)
-        plugin_profile = get_plugin_profile(suite)
+        selection = await select_plugins(client)
+        plugin_profile = get_plugin_profile_for(selection)
 
         # Build compressor FX entry with heavy-parallel character
         comp_profile = {
@@ -108,10 +110,11 @@ def register(mcp: FastMCP):
             "sources_routed": len(src_list),
             "comp": comp_profile,
             "return_db": return_db,
-            "plugin_suite": suite.value,
+            **selection.summary(),
         }
 
     @mcp.tool()
+    @undo_grouped(client, "setup_drum_bus")
     async def setup_drum_bus(
         source_tracks: str,
         bus_name: str = "BUS: Drums",
@@ -142,8 +145,8 @@ def register(mcp: FastMCP):
             raise ReaperMCPError(ErrorCode.INVALID_PARAMETER,
                                  "source_tracks must be a non-empty array")
 
-        suite = await detect_plugins(client)
-        plugin_profile = get_plugin_profile(suite)
+        selection = await select_plugins(client)
+        plugin_profile = get_plugin_profile_for(selection)
 
         comp_profile = {
             "threshold_db": glue_threshold_db, "ratio": glue_ratio,
@@ -169,10 +172,11 @@ def register(mcp: FastMCP):
             "bus_name": bus_name,
             "sources_routed": len(src_list),
             "glue_comp": comp_profile,
-            "plugin_suite": suite.value,
+            **selection.summary(),
         }
 
     @mcp.tool()
+    @undo_grouped(client, "setup_vocal_chain")
     async def setup_vocal_chain(
         track_index: int,
         hp_freq: float = 100.0,
@@ -209,8 +213,8 @@ def register(mcp: FastMCP):
         if track_index < 0:
             raise ReaperMCPError(ErrorCode.VALUE_OUT_OF_RANGE, "track_index must be >= 0")
 
-        suite = await detect_plugins(client)
-        plugin_profile = get_plugin_profile(suite)
+        selection = await select_plugins(client)
+        plugin_profile = get_plugin_profile_for(selection)
 
         # EQ entry
         eq_profile = {
@@ -287,7 +291,7 @@ def register(mcp: FastMCP):
             "track_index": track_index,
             "plate_bus_index": plate_idx,
             "plate_bus_name": plate_bus_name,
-            "plugin_suite": suite.value,
+            **selection.summary(),
         }
 
     @mcp.tool()

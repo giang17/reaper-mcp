@@ -116,7 +116,7 @@ Modules without a `register(...)` function (e.g., `compose_helpers.py`) are sile
 
 ## The Lua bridge
 
-`reaper_scripts/reaper_mcp_server.lua` is ~3 600 lines and runs as a deferred ReaScript (i.e., REAPER calls its main function on every UI tick). Each tick it:
+`reaper_scripts/reaper_mcp_server.lua` is ~5 500 lines and runs as a deferred ReaScript (i.e., REAPER calls its main function on every UI tick). Each tick it:
 
 1. Refreshes the lock file mtime (heartbeat).
 2. Checks for `command.json`. If present, parses and dispatches.
@@ -125,6 +125,41 @@ Modules without a `register(...)` function (e.g., `compose_helpers.py`) are sile
 Every handler is a static function keyed by name in a dispatch table — **no `dofile`, no `load`, no `loadstring`**. That means every command corresponds to explicit, reviewable Lua code with input validation per handler.
 
 The bridge is cross-platform: it detects OS via `reaper.GetOS()` and picks the right temp directory without the Python side having to tell it.
+
+### Failure containment
+
+Every command runs under `pcall`, so an error in a handler returns an error response instead of stopping the bridge. Two REAPER states can outlive a throw, though: a `PreventUIRefresh` hold (the UI stays frozen) and an open undo block. Handlers close both on their last lines, which a throw skips.
+
+`install_block_guard` wraps `PreventUIRefresh`, `Undo_BeginBlock` and `Undo_EndBlock` once at startup. The wrapper only counts and passes every argument and return value through. After each command, whatever its outcome and before any response is written, the dispatcher calls the returned unwind function, which releases any refresh hold and ends any open undo block. Ending the block records the partial work as one undo point, so it can still be undone. When something had to be unwound, the bridge notes it in REAPER's console. Handlers need no per-handler `pcall` for this, and new handlers are covered automatically (`tests/test_lua_block_guard.py`).
+
+### Undo
+
+Every change made through the bridge is one named undo step, so a mistake can be reversed with one undo (`project_undo`, or Ctrl+Z in REAPER).
+
+- **Track, FX and routing batch handlers** (`track_create`, `track_delete_batch`, `fx_remove_batch`, `setup_fx_chain`, `setup_master_chain`, `setup_effect_bus`, `setup_sidechain`, `setup_routing`, `configure_tracks`) wrap their work in their own `Undo_BeginBlock` / `Undo_EndBlock`, so a whole call collapses into one step.
+- **Everything else that changes the project** is listed in `UNDO_POINT_COMMANDS` (75 commands): simple edits such as a fader, pan, send, marker or tempo change, and every handler that touches items, MIDI notes or takes. After such a command succeeds, the dispatcher records one step named `MCP: <command>` (or the descriptive name the handler asked for, like `MCP: midi_insert_notes_batch (4 notes)`). Failed commands leave no step, and recording is best effort, so it can never fail a command.
+
+**Why items and MIDI are recorded by the dispatcher, not by a block.** REAPER's undo blocks do not capture MIDI item, note and take data when they are called from the bridge: the step they leave is empty or missing, so undoing it restores nothing (found by live testing, where undoing `item_create_midi` left the item in place). REAPER's two state-change calls each cover what the other misses: `Undo_OnStateChange2` records items, MIDI and takes, and the flagged `Undo_OnStateChangeEx2` records everything else (track, FX, send, marker, tempo). `record_undo_step` uses **exactly one** of them per command, chosen by what the command changes: the commands in `UNDO_ITEM_COMMANDS` use `Undo_OnStateChange2`, and every other recorded command uses the flagged call. Calling both for one command is not an option, because REAPER syncs item state lazily and a tool that sends commands back to back sometimes recorded an item change twice. The one exception is `track_set_state_chunk`, which replaces a whole track including its items, so it makes both calls. For the commands in `UNDO_POINT_COMMANDS` the block guard keeps a handler's own `Undo_BeginBlock` / `Undo_EndBlock` out of REAPER and only remembers the name the handler asked for, so a command never leaves an extra empty step.
+- **Exempt commands** (`UNDO_EXEMPT_COMMANDS`, each with a reason) get no step: read-only calls, transport and selection, file operations and renders, REAPER actions that record their own step, and undo and redo themselves. Recording a point after an undo would erase the redo stack.
+
+Every handler that changes REAPER state must be in exactly one of the two tables (or manage its own block), and `tests/test_lua_undo_points.py` fails when a new handler is added without a decision, or when a handler that changes items or MIDI is left to an undo block.
+
+**Undo groups.** A tool that runs several bridge commands, such as `engine_mix`, leaves one undo step per command, so a mistake can be undone piece by piece. Those tools are wrapped with `@undo_grouped(client, "<tool>")` (`reaper_mcp/undo_group.py`), which sends `undo_group_begin` first and `undo_group_end` last. While a group is open the bridge labels every step it records `MCP: <tool>#<run> > <command>` (for example `MCP: engine_mix#7 > setup_fx_chain`), where the run number tells two runs of the same tool apart. Two tools use that label:
+
+- `project_undo(steps=N)` undoes the last N steps in one call, so the last two or three commands of a ten-command tool can be taken back without touching the rest.
+- `project_undo_group` undoes every consecutive step of the most recent run, stopping at the first step that belongs to something else.
+
+A group only labels; it holds nothing open in REAPER. That is deliberate: REAPER drops an undo block that is held open between bridge ticks, so collapsing a whole tool into one step is not possible, and it would also have taken away the finer control. Groups nest (an inner tool joins the outer run), the group is closed even if the tool raises, and an older bridge script that doesn't know the commands just leaves the tool unlabelled. If a caller never closes its group (the Python process died), the bridge stops labelling after 60 seconds without a command and says so in REAPER's console. The wrapped tools are listed in `tests/test_undo_group.py`, which fails if one loses its decorator.
+
+### Track addressing and the master track
+
+REAPER keeps the master track outside its numbered track list: `GetTrack(0, i)` never returns it, `GetMasterTrack(0)` does. The bridge exposes it as `track_index = -1`, resolved in one place:
+
+- **`get_track(params, key)`** — the standard lookup used by most handlers. Resolves `-1` to the master track, any other index to a numbered track.
+- **`get_numbered_track(params, key)`** — `get_track` that refuses `-1`. Used by handlers where the master track is meaningless or dangerous: `track_delete_batch` (for each target it resolves), `track_freeze`, `track_unfreeze`, `track_set_folder`, `track_set_input`, `track_set_record_arm` and `track_set_state_chunk`.
+- **`batch_track_from_index(ti)`** — the same `-1` rule for the batch entry points (`setup_fx_chain`, `configure_tracks`) that receive a raw index per entry instead of a params table.
+
+Which tools accept `-1` is therefore decided twice: the Python tool validates first, and the Lua handler enforces it again. A destructive handler keeps refusing the master even if a Python guard is later loosened. New handlers that act on a track should use `get_numbered_track` unless acting on the master is meaningful. The behaviour of both lookups is tested by running the real Lua helpers under `lupa` with a stubbed `reaper` (`tests/test_lua_master_guard.py`).
 
 ---
 
@@ -183,9 +218,15 @@ That means the same style profile works regardless of whether you named your kic
 
 ### Plugin parameter translation
 
-`plugins.py` holds a tightly calibrated param-name mapping for FabFilter Pro-Q 3 / Pro-C 2 / Pro-R and REAPER stock. For other brands (Waves, iZotope, Valhalla, Softube …) the engine adds the plugin but uses fuzzy name matching — approximate, works for most cases, and the user is told to fine-tune afterwards.
+`plugins.py` holds tightly calibrated parameter maps for two plugin families: FabFilter (Pro-Q 3 / Pro-C 2 / Pro-R / Pro-L 2) and REAPER stock (ReaEQ / ReaComp / ReaVerbate / ReaLimit). The pipelines place only plugins from those families. For other brands (Waves, iZotope, Valhalla, Softube …) they use the best supported plugin for the category instead, and the AI is told to set up the other plugin itself with `setup_fx_chain`.
 
-Users can pin category → plugin preferences via `set_fx_preferences({"eq": "...", "compressor": "..."})`. Stored at `%APPDATA%/reaper_mcp/fx_prefs.json` on Windows and `~/.config/reaper_mcp/` on macOS / Linux.
+### Plugin selection
+
+The mix, master, fix-mix and bus pipelines choose a plugin family **per category** (eq, compressor, reverb, limiter), not one flag for everything. `selection.py` starts from the installed-plugin inventory (`get_inventory`, built from `fx_list_installed`, with the user's preferences applied) and resolves each category to the family whose parameter map can drive the chosen plugin. A `CompositeProfile` then builds each stage from its own category's family, so a preference for ReaEQ as the EQ doesn't change the compressor, and the master chain builds each stage (EQ, compressor, limiter) the same way.
+
+REAPER's own plugins are a last resort: a category uses the stock plugin only when no supported third-party plugin is installed for it, even if a preference names the stock one. A preference the engine can't honor (a plugin it has no parameter map for, one that isn't installed, or a stock plugin while a third-party one is available) is never silently dropped: the pipeline uses the best supported plugin for that category and lists the reason under `preferences_ignored` in its result, and `set_fx_preferences` reports up front which preferences the engine can use (`engine_support`). Every pipeline result also carries `plugin_families`, the family used for each category.
+
+Users pin category → plugin preferences via `set_fx_preferences({"eq": "...", "compressor": "..."})`. Stored at `%APPDATA%/reaper_mcp/fx_prefs.json` on Windows and `~/.config/reaper_mcp/` on macOS / Linux.
 
 ---
 

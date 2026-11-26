@@ -2,6 +2,438 @@
 
 All notable changes to ReaperMCP will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `envelope_get_points`, `envelope_add_points` and `envelope_clear_range`
+  accept `track_index=-1` for the master track, the same convention the fx
+  tools use. This lets you automate the master volume (e.g. a fade-out) and
+  pan. Numbered tracks behave as before.
+- `load_loops` tempo-matches loops to the project (on by default). A loop's
+  BPM comes from the entry's `source_bpm` or its filename; half or double
+  time is used when closer, pitch is preserved, and the item is resized so
+  the whole loop plays. One-shots with no BPM are inserted untouched, and
+  `match_tempo` turns it off per call or per entry. Large stretches are
+  listed in `tempo_warnings`.
+
+### Fixed
+
+- `item_insert_media` no longer goes through REAPER's import routine, which
+  could stop on an "embedded tempo information" prompt for ACID-tagged
+  loops and block the bridge until someone answered it in REAPER. It also
+  returns the item it actually inserted, with its real index, instead of
+  the track's last item.
+- Asking for a Mute envelope on the master track, which REAPER doesn't
+  create, now says so and points to the master Volume envelope instead of
+  a bare "could not be created".
+
+## [0.8.3] - 2026-10-26
+
+### Added
+
+- `setup_fx_chain` entries accept `named_config` for plugin state that
+  isn't an automatable param (e.g. `{"BANDENABLED4": "1"}`). Each value is
+  read back and reported in `named_config_set`, because REAPER's setter can
+  return false even when the write works. `engine_master` applies it too.
+
+### Changed
+
+- **A saved FX preference is never overridden.** Choosing ReaEQ / ReaComp /
+  ReaVerbate / ReaLimit for a category now uses it even with FabFilter
+  installed (previously the engine silently swapped it for FabFilter). With
+  no preference, the engine still picks the best installed plugin.
+
+### Fixed
+
+- **ReaEQ's high-pass band was never switched on, so every `hp_freq` in
+  every mix profile (and the master's 25Hz rumble filter) had no effect**
+  (issue #44). Band 5 ships disabled and its enable state isn't an
+  automatable param. The EQ builders now switch it on via `named_config`
+  only when there's a real high-pass, and off on the master tonal EQ.
+- **`envelope_add_points`/`envelope_get_points` wrote and read raw
+  envelope values** (issue #44, confirmed live). Volume envelopes use fader
+  scaling, where 0 dB is ~716, so the documented "1.0 = unity" landed near
+  silence. Values now go through the envelope's own scaling mode.
+- **Pan envelopes were mirrored left/right.** REAPER stores pan envelope
+  values negated (measured: a track panned -0.5 seeds its envelope with
+  +0.5); the tools now convert, so -1.0 is hard left as documented.
+- **Creating an envelope reset the track's fader/pan, left a stray point
+  at t=0 and changed the track selection** (issue #44, confirmed live:
+  -7 dB fader jumped to 0 dB). Fader, pan, width and selection are now
+  restored and the seed point removed.
+- **Width and the Pre-FX Volume/Pan/Width envelopes couldn't be created**
+  even though the tools listed them, and the error still said "pass
+  create=true". They can now be created; failures give an accurate error.
+- **`project_set_ripple_mode` ran the wrong actions**: every ID was off by
+  one, so mode 0 turned per-track ripple *on*, and mode 2 ran "Item:
+  Remove selected area of items". It also turned loop-repeat off on every
+  call. Action IDs are now verified against REAPER's own action names.
+- **`item_split_at_transients` never split anything**: action 40310 is
+  "Set ripple editing per-track", not a split, and REAPER has no native
+  split-at-transients action. It now walks the item's transients with
+  "Move cursor to next transient in items" and splits at each, restoring
+  the edit cursor afterwards.
+- **`take_set_reversed` toggled reverse in place** (41051) instead of
+  "Reverse items to new take" (40270) as documented, so calling it twice
+  silently un-reversed the item.
+- **The stock EQ dropped bell bands: 124 of the catalog's 375 roles lost
+  at least one** (e.g. alt_rock's lead-vocal +2dB presence boost at 4kHz).
+  Only ReaEQ bands 2/3 took bells, on the wrong belief that bands 1/4 are
+  fixed shelves. They switch to bells via `BANDTYPEx` (confirmed live), so
+  bells now use any band a shelf doesn't need, and no catalog role loses a
+  band. Band type and enable are written explicitly for every band used, so
+  a custom ReaEQ default preset can't change the result.
+- **ReaVerbate width was written on the wrong scale.** Its Width param runs
+  -1.00..+1.00 (0.5 = mono), so the "room" bus's 0.8 width landed at 0.60,
+  and 0.0 would have inverted the stereo image. Now `(width + 1) / 2`.
+  Room size, previously flagged as non-linear, was swept and is linear
+  (30..98), so it was already correct.
+- **`engine_master`/`engine_mix` with `clean=True` could delete the user's
+  own FX.** When no `[MIX] `-tagged FX were present, both fell back to
+  removing anything named like ReaEQ / ReaComp / ReaLimit / Pro-Q 3 /
+  Pro-C 2 / Pro-L, so a hand-built FabFilter master chain was wiped. Clean
+  now removes only FX the engine tagged itself.
+- **`engine_fix_mix` added untagged FX** (it relied on that fallback to
+  replace its own chain); its track EQ and master chain are now tagged.
+- **Bus and FX-return tracks got instrument processing**: a return named
+  "Plate Reverb (Vocals)" was given lead-vocal EQ/compression by
+  `engine_mix`, and `engine_fix_mix` EQ'd every return. Tracks with no media
+  that receive sends are now skipped.
+- **Plain stem names matched no role**: "Guitar" and "Bass" were unmatched
+  in every rock style (only "gtr"/"bass gtr" were aliases), and similar gaps
+  existed across families. A track the style's aliases miss now falls back
+  to common names (guitar, bass, vocal, piano, keys, strings, pad, lead,
+  horns), only ever onto a role that style actually has.
+
+- **The stock-plugin fallback (ReaComp/ReaLimit/ReaEQ, used by `engine_mix`/
+  `engine_master` whenever FabFilter isn't installed) wrote several
+  parameters to the wrong index or the wrong scale, producing a mix with no
+  compression anywhere, a master ~12dB too quiet, and EQ cuts/boosts off by
+  a growing margin from what was asked for** (issue #41, reported with an
+  exceptionally thorough live measurement of REAPER 7.82's real parameter
+  behavior). All of the following were confirmed independently this
+  session via `fx_get_params` read-back (name + REAPER-formatted display)
+  against a real install, not just the report:
+  - **ReaComp**: `Ratio` and `Pre-comp` were swapped (index 1 was written
+    as pre-comp-off, index 4 as ratio — the real plugin has them the other
+    way round), so the compressor's ratio silently never moved off 1:1.
+    `Knee` was written to index 5 (an unused/reserved slot); the real Knee
+    is at index 14. Index 6/7 were treated as "RMS size"/"makeup", but are
+    actually the detector's own sidechain lowpass/highpass filters — left
+    at the old formula's values, they put the detector behind a ~200Hz
+    lowpass and an ~11kHz highpass, so it heard almost nothing regardless
+    of the ratio fix. Makeup gain is now correctly written to index 11
+    ("Wet"), confirmed live to be a plain amplitude control
+    (`10**(dB/20)`) — the original report left this unconfirmed; this
+    session resolved it with a direct live test.
+  - **ReaLimit**: threshold and ceiling were both normalized over the same
+    -60..0dB range, but the real ranges are -60..+12dB (threshold) and
+    -24..0dB (ceiling) — confirmed live. An intended 0dB threshold actually
+    landed at +12dB and an intended -1dB ceiling landed at -0.4dB, cutting
+    the whole master by the ~12.4dB difference between them.
+  - **ReaEQ gain**: the formula was linear in dB (`0.25 + db/24`); the real
+    scale is exponential (`10**(db/20)/4`), confirmed live. The error grows
+    with distance from 0dB — an intended -2dB cut actually landed at -3.5dB.
+  - **ReaEQ bandwidth**: Q was written directly as the BW param
+    (`q / 5.0`), but BW increases with the param value on the real plugin,
+    so a *higher* (narrower-intended) Q produced a *wider* band — backwards
+    from what Q means. Now uses the standard Q<->bandwidth relationship.
+  - **A 3rd+ EQ bell band was silently dropped** with no indication in the
+    response. ReaEQ only has 2 generic bell slots; band 1/4 are hard-wired
+    to Low Shelf/High Shelf in the plugin itself (confirmed live via their
+    REAPER parameter names, literally `Freq-Low Shelf` / `Freq-High Shelf
+    4`, not a switchable type) — so reusing a free shelf slot for an extra
+    bell was considered and rejected, since it would silently apply a
+    shelf-shaped curve instead of a bell. Dropped bands are now logged
+    instead.
+  - **`master.py` had its own, separately-calibrated (and equally wrong)
+    copies** of the ReaEQ frequency/gain formulas and the ReaComp index map,
+    instead of reusing `plugins.py`'s versions. Both now import/delegate to
+    the single corrected implementation.
+  - Also fixed: the master-bus tonal EQ (a separate ReaEQ instance from the
+    subtractive stage) never explicitly zeroed its own band 5 (high-pass),
+    which defaults to an unconfirmed ~100Hz on at least one install — it's
+    now explicitly set to 20Hz/0dB regardless, harmless either way.
+  - **Known remaining gap, lower severity, not yet fixed**: ReaVerbate's
+    `room_size` parameter isn't the 1:1 pass-through the code assumes —
+    confirmed live it's non-linear (0.25→"47", 0.5→"64", 0.75→"81", not a
+    clean sqrt/log fit from those points either). `dampening` *is* a clean
+    1:1 pass-through, confirmed the same way. This affects the reverb's
+    "size" feel, not whether it's audible — left for a follow-up with a
+    proper multi-point sweep.
+  - Pinned regression tests added in `tests/test_mix_engine_formulas.py`
+    for every corrected formula, using the exact live-confirmed
+    value/display pairs above.
+- **`fx_scan_params` crashed on any plugin on at least one install** —
+  `reaper.TrackFX_GetParameterStepCount` isn't a real REAPER API function
+  there (confirmed live: calling it throws "attempt to call a nil value"),
+  so the whole scan crashed before reaching the existing fallback for
+  continuous params. The call is now guarded so a missing function falls
+  through to that fallback instead. Covered by
+  `tests/test_fx_scan_params_lua.py`.
+
+- **`track_set_input(input_index=-1)` cleared the track's input instead of
+  selecting all MIDI inputs.** The tool documents and accepts `-1` as "MIDI
+  all", but the Lua handler wrote it straight to `I_RECINPUT`, where REAPER
+  reads any negative value as "no input". The handler now translates `-1` to
+  `6112` (MIDI, all inputs, all channels); every other value is passed
+  through unchanged. The tool's description also had the ranges wrong (`0`
+  is the first mono input, not "none"); it now gives the correct ranges.
+  Tests run the real handler under `lupa` with a stubbed `reaper`.
+
+- **`envelope_add_points` accepted an all-zero batch on the Volume envelope
+  and reported success, silently writing −∞ dB (total silence) to the track.**
+  This is the failure mode described in issue #39: AI clients that receive the
+  "must be linear gain (≥ 0)" error for a negative dB value "fix" it by
+  clamping every point to `0.0`, which passes per-point validation but
+  produces an all-silence envelope. The server now rejects any batch of 2+
+  points where every value is `0.0` on a dB-based envelope (`Volume`,
+  `Volume (Pre-FX)`) with a `VALUE_OUT_OF_RANGE`
+  error that explicitly says "do not clamp — convert: `value = 10 ** (db / 20)`".
+  Single zero-value points (legitimate fade-to-silence points) are still
+  allowed. `Width`/`Width (Pre-FX)` are deliberately excluded — Width isn't
+  dB-based, so there's no equivalent conversion mistake, and an all-zero
+  Width batch (collapsed to mono) is an ordinary intentional request, not
+  silence. The error message on negative values and the docstrings for
+  `_validate_envelope_value` and `envelope_add_points` also now carry an
+  explicit "NEVER clamp negative dB to 0.0" warning. Covered by new tests
+  in `tests/test_envelope_validation.py`.
+
+## [0.8.2] - 2026-09-23
+
+### Added
+
+- **`uvx xdarkzx-reaper-mcp` now works.** The PyPI package name
+  (`xdarkzx-reaper-mcp`) and the console command (`reaper-mcp`) never
+  matched, so `uvx`/`npx`-style ephemeral launchers — which assume the
+  command name equals the package name — couldn't find it (`uvx` reported
+  "An executable named `xdarkzx-reaper-mcp` is not provided by package
+  `xdarkzx-reaper-mcp`"). A second console-script entry aliases the package
+  name to the same entry point, so both `reaper-mcp` and
+  `uvx xdarkzx-reaper-mcp` work; existing `"command": "reaper-mcp"` configs
+  are unaffected. Documented as a zero-install option in `docs/INSTALLATION.md`.
+
+### Fixed
+
+- **`set_fx_preferences` had no effect on the mix and master pipelines.**
+  Saving a preference (say ReaEQ as the EQ) changed what `fx_list_installed`
+  reported, but `engine_mix`, `engine_master`, `engine_fix_mix`,
+  `setup_drum_bus`, `setup_vocal_chain` and `setup_parallel_compression`
+  chose their plugins from a single "FabFilter or stock" flag
+  (`detect_plugins`) that ignored preferences, so Pro-Q 3 was placed anyway.
+  They now choose a plugin family **per category** (eq, compressor, reverb,
+  limiter) from the inventory and the preferences, and the master chain
+  builds each stage from its own category's family. A preference for one
+  category no longer changes the others.
+- **A preference the engine can't honor is now reported, not silently
+  dropped.** The engine has parameter maps for two families, REAPER stock and
+  FabFilter (Pro-Q 3 / Pro-C 2 / Pro-R / Pro-L 2). For a preference outside
+  those, or for a plugin that isn't installed, it uses the best supported
+  plugin for that category and lists the reason under `preferences_ignored`
+  in the pipeline's result. `set_fx_preferences` now says up front which of
+  your preferences the engine can use (`engine_support`), and every pipeline
+  result carries `plugin_families`.
+- **REAPER's stock plugins are now a last resort.** For each category the
+  engine uses ReaEQ / ReaComp / ReaVerbate / ReaLimit only when no supported
+  third-party plugin (FabFilter) is installed for it, even if a saved
+  preference names the stock plugin; that preference is reported under
+  `preferences_ignored`.
+- **The docs claimed the pipelines add other brands' plugins with fuzzy
+  parameter matching.** They don't; corrected in the architecture notes and
+  the AI instructions.
+
+### Removed
+
+- **`detect_plugins`**, the single-flag "FabFilter or stock" detector,
+  superseded by the per-category selection built on the plugin inventory.
+  It was internal, not a tool, so nothing calling the MCP tools is affected.
+
+## [0.8.1] - 2026-09-21
+
+### Added
+
+- **`project_undo` and `project_redo` take a `steps` count (1-100).** Undo
+  just the last two or three commands of a ten-command tool in one call.
+  The response lists every step undone, most recent first, and stops early
+  if the history runs out. A plain call still undoes one step.
+- **`project_undo_group`** — undo every consecutive step of the most recent
+  multi-command tool run (say, everything `engine_mix` just did) in one
+  call. It stops at the first step that belongs to something else, leaves
+  earlier runs of the same tool alone, and refuses, changing nothing, when
+  the last step didn't come from such a run.
+
+### Fixed
+
+- **Undoing an item, MIDI or take edit restored nothing.** Live testing
+  showed that undoing `item_create_midi` reported the step as undone while
+  the item stayed on the track, and the same held for note inserts and the
+  other item, MIDI and take handlers (20 of them, including
+  `midi_insert_notes_batch`, `items_apply`, `item_duplicate`,
+  `item_split_at_positions`, `take_set_pitch` and `wipe_all_midi`). Cause:
+  REAPER's undo blocks do not capture this data when called from the bridge,
+  so the step they leave is empty or missing. These handlers' steps are now
+  recorded by the dispatcher instead, and their own blocks stay out of
+  REAPER. Each command is recorded with exactly one REAPER call, chosen by
+  what it changes: the call that captures items, MIDI and takes for those
+  (`Undo_OnStateChange2`), and the flagged call for everything else
+  (track, FX, send, marker, tempo). Calling both for one command was tried
+  and rejected, because REAPER syncs item state lazily and a tool sending
+  commands back to back sometimes left two identical steps. Tests fail if a
+  command that changes items or MIDI is left to an undo block or recorded
+  with the wrong call.
+- **Simple edits had no undo step of their own, so undo skipped past
+  them.** Batch and structural tools wrap their work in a named undo block,
+  so one Ctrl+Z reverses a whole call. But a fader, pan, mute, send, marker,
+  item or tempo edit did not: REAPER's undo skipped over it and rolled back
+  an earlier step instead. The dispatcher now records one named step,
+  `MCP: <command>`, after each of 75 such commands succeeds. Failed,
+  read-only, transport, selection, file and undo/redo commands add no step
+  (recording a point after an undo would erase the redo stack). REAPER
+  already records its own step for plugin bypass and reordering, and those
+  stay a single step.
+- **A multi-command tool's undo steps couldn't be told apart or undone
+  together.** `engine_mix`, `engine_master`, `engine_fix_mix`,
+  `chop_pipeline`, `stack_chop_layers`, `compose_arrangement`,
+  `demo_edm_project`, `load_loops`, `setup_vocal_chain`, `setup_drum_bus`,
+  `setup_parallel_compression`, `setup_sidechain`, `create_drum_pattern`,
+  `create_chord_progression` and `wipe_all_midi` leave one undo step per
+  command they run, which is what lets you take back just the last few. But
+  those steps carried no sign of which tool made them, so undoing "what
+  engine_mix just did" meant counting. These tools now run inside an undo
+  group that labels each step `MCP: <tool>#<run> > <command>`. A group only
+  labels and holds nothing open in REAPER (REAPER drops an undo block held
+  open between bridge ticks). It closes even if the tool fails, is skipped
+  harmlessly by an older bridge script, and stops labelling by itself after
+  60 seconds idle if the server process dies.
+- **A new command can't silently miss an undo step.** Every handler that
+  changes the project is classified either as recorded or as deliberately
+  exempt with a reason, and a test fails when a handler is added without a
+  decision.
+
+Verified on live REAPER with the release code, checking the actual state
+after each undo. A fader move, item creation, MIDI notes, an item move, a
+marker and a tempo marker each undo as one step that restores the state.
+A sequence of 16 changes (three grouped `create_drum_pattern` runs plus item,
+notes, move, fader, marker, tempo, send and plugin edits) left exactly 16
+steps with no duplicates; undoing all 16 (`project_undo(steps=16)`) removed
+every trace, and redoing all 16 restored the tracks, items, notes, volume,
+send, plugin, marker and tempo marker exactly. `project_undo_group` undoes
+a grouped run's steps together and leaves earlier steps alone, and
+block-based handlers (`setup_fx_chain`, batch track delete, batch plugin
+removal) still undo cleanly.
+
+## [0.8.0] - 2026-09-21
+
+### Added
+
+- **Master track is addressable as `track_index=-1`.** REAPER keeps the
+  master outside the numbered track list (`GetTrack` never returns it,
+  `GetMasterTrack` does), so the FX tools could not reach it at all. The
+  Lua `get_track` helper now maps `-1` to the master, and every `fx_*`
+  tool that takes a `track_index` accepts it — chain inspection,
+  parameters and scanning, enable/disable, presets, move, rename, UI, and
+  pin mappings. Anything below `-1` is still rejected.
+- **`setup_fx_chain` and `configure_tracks` accept `-1` too**, so a full
+  mastering chain (EQ, compressor, saturation, limiter — with parameters)
+  can be built in the same call as track FX, without going through
+  `engine_master`, which replaces the master chain. This applies to those
+  two batch entry points only; no other tool gained master access.
+- **`fx_remove_batch`** — remove one FX, several, or an entire chain,
+  across one or many tracks, in one call. Each entry names a `track_index`
+  (`-1` for master) and exactly one of `all`, `fx_index`, or `fx_indices`.
+  Indices are resolved against every chain as it stands when the call
+  starts and deleted highest-first, so overlapping or out-of-order entries
+  cannot shift an index mid-batch. A bad track or index is reported in the
+  response's `errors` array without aborting the rest, and the whole call
+  is a single undo step. Follows the same pattern as `items_apply` and
+  `markers_apply`.
+- **`track_delete_batch`** — delete one track, several, or every track in
+  one call. Each entry has exactly one of `all`, `track_index` or
+  `track_indices`. Targets are resolved against the numbering at the start
+  of the call and deleted highest-first, so entry order and overlapping
+  entries can't shift an index. The master track is refused per entry, a
+  bad index is reported in `errors` without aborting the rest, and the
+  response lists what was deleted by original index and name. Takes the
+  usual pre-action project backup and is a single undo step.
+
+### Changed
+
+- **Upgrading: update the Lua script together with the package.** The new
+  batch tools depend on handlers in `reaper_scripts/reaper_mcp_server.lua`
+  (`fx_remove_batch`, `track_delete_batch`) and on the master-track and
+  safety changes below. A 0.8.0 server talking to an older script reports
+  "Unknown command" for them. If you installed from PyPI, re-download the
+  script from the repo and restart REAPER.
+- **`track_delete` (single track) is removed in favour of
+  `track_delete_batch`.** A batch of one entry does everything the old
+  tool did (`[{"track_index": 3}]`). Anything calling `track_delete` by
+  name must switch. The mix engine's cleanup of its own `MIX:` reverb
+  buses now deletes them with one batch call instead of one call per bus.
+- **`fx_remove` (single FX) is removed in favour of `fx_remove_batch`.**
+  A batch of one entry does everything the old tool did. Anything calling
+  `fx_remove` by name must switch to `fx_remove_batch`
+  (`[{"track_index": 2, "fx_index": 3}]`). The mix engine's cleanup of its
+  own `[MIX]`-tagged FX now removes them with one batch call per track
+  instead of one call per FX.
+- **The publish workflow now runs `ruff check .` before building.** Lint
+  was a gate only in the CI workflow, so a version tag could publish a
+  commit whose tests passed but whose static analysis had not run. The
+  `build` job now needs both `lint` and `test`.
+- **Documentation corrected to match the code.** The README's headline
+  said 182 tools; the default profile registers 180 across 26 modules. The
+  module count in `docs/TOOLS.md` was also off by one (it counted a helper
+  module that registers no tools). The instruction-size column in the profile table in
+  `docs/TOOLS.md` is refreshed for the instruction text added in this
+  release. `docs/ARCHITECTURE.md` gains sections on failure containment and
+  on track addressing and the master track.
+
+### Security
+
+- **Destructive track handlers refuse the master track in Lua, not just in
+  Python.** Widening `get_track` to resolve `-1` meant ~40 handlers could
+  reach the master track, with only the Python guards in front deciding
+  which. `track_delete_batch` (per entry), `track_freeze`, `track_unfreeze`,
+  `track_set_folder`, `track_set_input`, `track_set_record_arm` and
+  `track_set_state_chunk` now use a `get_numbered_track` helper that keeps
+  refusing `-1` if a Python guard is later loosened. Tests run the real
+  helpers under `lupa` with a stubbed `reaper` to check both behaviours.
+
+### Fixed
+
+- **A command that failed part-way could leave REAPER's UI frozen and an
+  undo block open.** Eight handlers (`setup_fx_chain`, `setup_effect_bus`,
+  `setup_sidechain`, `item_clone_to_position`, `item_duplicate`, both
+  `item_split_*` handlers and `take_set_reversed`) hold `PreventUIRefresh`
+  while they work, and about 40 open an undo block, closing both on their
+  last lines. A malformed entry that threw in between was caught by the
+  dispatcher, but the closing calls never ran. Only `setup_master_chain`
+  was protected. The bridge now counts every open and close, and after each
+  command — success or failure — closes whatever it left open, recording
+  partial work as a single undo point and noting it in REAPER's console.
+  One safeguard in the dispatcher covers every handler, including future
+  ones.
+- **FX tools reported success for an FX index that doesn't exist.**
+  `fx_enable`, `fx_disable`, `fx_move`, `fx_get_params`, `fx_get_preset`,
+  `fx_navigate_preset`, `fx_rename`, `fx_scan_params`, `fx_set_param`,
+  `fx_set_param_by_name`, `fx_set_preset` and `fx_show_ui` called REAPER
+  without checking the index, and REAPER quietly does nothing for one that
+  isn't there — so `fx_enable(track, 99)` came back as a success with the
+  chain unchanged. They now return `fx_index N out of range (chain has M)`.
+  `fx_move` checks its `new_index` the same way.
+- **`setup_fx_chain` validated almost nothing before reaching REAPER.**
+  A non-object entry raised a raw `TypeError`, a chain item with neither a
+  `name` nor an `fx_index` was silently skipped (reading as a success for
+  something that never happened), and entry counts were unbounded. It now
+  checks entry and chain shapes, `track_index` type and range, `add_mode`,
+  `params` / `params_by_index` keys and finite values, and `preset`, with
+  per-entry errors and caps of 200 entries, 50 FX per track and 1000
+  parameters per FX entry.
+- **`safe_path`'s system-directory blocklist missed macOS symlinked
+  directories.** `/etc`, `/tmp` and `/var` are symlinks into `/private/...`
+  on macOS, so a resolved path compared against the unresolved blocklist
+  entry slipped through. Both sides are now resolved before comparing.
+
 ## [0.7.1] - 2026-09-16
 
 ### Added
